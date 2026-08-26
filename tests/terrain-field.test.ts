@@ -6,6 +6,7 @@ import { TrackSpline } from "../src/game/track/TrackSpline";
 import { buildRoadIndex } from "../src/game/track/terrain/roadIndex";
 import { profileHeightAt, VERGE_WIDTH, ROAD_CLEARANCE } from "../src/game/track/terrain/layers/roadProfile";
 import { buildBaseAltitude } from "../src/game/track/terrain/layers/baseAltitude";
+import { ridgeReliefAt, ridgeWeightAt } from "../src/game/track/terrain/layers/ridgeLayer";
 
 describe("RoadIndex", () => {
   it("returns exactly the samples a brute-force scan would return", () => {
@@ -179,6 +180,37 @@ describe("baseAltitude", () => {
     for (let i = 0; i < 50; i++) {
       const x = s.x + i * 37, z = s.z - i * 53;
       assert.equal(a.sample(x, z), b.sample(x, z));
+    }
+  });
+});
+
+describe("ridgeLayer", () => {
+  it("weights ridges out entirely near the road and fully in the far field", () => {
+    assert.equal(ridgeWeightAt(0), 0);
+    assert.equal(ridgeWeightAt(179), 0);
+    assert.equal(ridgeWeightAt(800), 1);
+    assert.equal(ridgeWeightAt(5000), 1);
+    assert.ok(ridgeWeightAt(490) > 0.4 && ridgeWeightAt(490) < 0.6);
+  });
+
+  it("has a zero derivative at both ends of the blend, so ridges never crease in", () => {
+    assert.ok(Math.abs(ridgeWeightAt(181) - ridgeWeightAt(180)) < 1e-3);
+    assert.ok(Math.abs(ridgeWeightAt(799) - ridgeWeightAt(800)) < 1e-3);
+  });
+
+  it("is continuous in world space", () => {
+    let prev = ridgeReliefAt(0, 0);
+    for (let x = 1; x <= 4000; x += 1) {
+      const h = ridgeReliefAt(x, 137);
+      assert.ok(Math.abs(h - prev) < 2.0, `relief jumped ${Math.abs(h - prev)} at x=${x}`);
+      prev = h;
+    }
+  });
+
+  it("is deterministic", () => {
+    for (let i = 0; i < 100; i++) {
+      const x = i * 91.7, z = i * -43.3;
+      assert.equal(ridgeReliefAt(x, z), ridgeReliefAt(x, z));
     }
   });
 });
