@@ -4,9 +4,51 @@ import { describe, it } from "node:test";
 import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
 import { buildRoadIndex } from "../src/game/track/terrain/roadIndex";
-import { profileHeightAt, VERGE_WIDTH, ROAD_CLEARANCE } from "../src/game/track/terrain/layers/roadProfile";
+import {
+  profileHeightAt,
+  VERGE_WIDTH,
+  ROAD_CLEARANCE,
+  VALLEY_FLOOR_ALT,
+  MAX_VISIBLE_DROP,
+} from "../src/game/track/terrain/layers/roadProfile";
 import { buildBaseAltitude } from "../src/game/track/terrain/layers/baseAltitude";
 import { ridgeReliefAt, ridgeWeightAt } from "../src/game/track/terrain/layers/ridgeLayer";
+import { carveAt, CARVE_RADIUS } from "../src/game/track/terrain/layers/roadCarveLayer";
+
+// Performance guard: the "never above the road" sweep below is O(samples * lateral steps)
+// per stage, each carveAt() doing a spatial query. Striding the SAMPLE loop (never the
+// 0.4 m lateral step, which is the point of the test) keeps the whole suite fast without
+// weakening what it catches.
+const SAMPLE_STRIDE = 1;
+
+// roadProfile.ts's own internal falloff constant for the exposed-side drop
+// (`1 - 1/(1 + dd * DROP_FALLOFF)`), duplicated here because it is not exported and this
+// file must not modify roadProfile.ts. If that constant ever changes, this must too.
+const DROP_FALLOFF = 0.055;
+
+/**
+ * The steepest slope profileHeightAt can legitimately produce: the initial gradient of
+ * the exposed-side drop at d=0, `depth * DROP_FALLOFF`, where `depth` is exactly what
+ * roadProfile.ts uses — min(dropDepth, altitude - VALLEY_FLOOR_ALT, MAX_VISIBLE_DROP).
+ * A cliff at this slope is real terrain, not a defect; the continuity tests below assert
+ * against a tolerance derived from this bound (computed per stage from its own samples),
+ * not a fixed constant, so they catch wedge discontinuities without outlawing real cliffs.
+ */
+function maxLegitSlopeForSample(s: { dropDepth?: number; altitude: number }): number {
+  const declared = s.dropDepth ?? 40;
+  const toValleyFloor = Math.max(20, s.altitude - VALLEY_FLOOR_ALT);
+  const depth = Math.min(declared, toValleyFloor, MAX_VISIBLE_DROP);
+  return depth * DROP_FALLOFF;
+}
+
+function maxLegitSlope(spline: TrackSpline): number {
+  let max = 0;
+  for (const s of spline.getAllSamples()) {
+    const slope = maxLegitSlopeForSample(s);
+    if (slope > max) max = slope;
+  }
+  return max;
+}
 
 describe("RoadIndex", () => {
   it("returns exactly the samples a brute-force scan would return", () => {
@@ -134,10 +176,18 @@ describe("roadProfile", () => {
   it("is continuous in lat", () => {
     const spline = new TrackSpline(getStageDef("borbera-sprint"));
     const s = spline.getAllSamples()[500];
+    const step = 0.5;
+    // A real cliff is allowed; a wedge discontinuity is not. Tolerance is derived from
+    // this sample's own steepest legitimate slope (see maxLegitSlopeForSample above),
+    // not a fixed constant that would either outlaw real cliffs or hide real jumps.
+    const tolerance = maxLegitSlopeForSample(s) * 1.25 * step;
     let prev = profileHeightAt(s, -260);
-    for (let lat = -259.5; lat <= 260; lat += 0.5) {
+    for (let lat = -259.5; lat <= 260; lat += step) {
       const h = profileHeightAt(s, lat);
-      assert.ok(Math.abs(h - prev) < 2.0, `jump of ${Math.abs(h - prev)} m at lat ${lat}`);
+      assert.ok(
+        Math.abs(h - prev) < tolerance,
+        `jump of ${Math.abs(h - prev)} m at lat ${lat} (tolerance ${tolerance.toFixed(2)} m)`
+      );
       prev = h;
     }
   });
@@ -211,6 +261,116 @@ describe("ridgeLayer", () => {
     for (let i = 0; i < 100; i++) {
       const x = i * 91.7, z = i * -43.3;
       assert.equal(ridgeReliefAt(x, z), ridgeReliefAt(x, z));
+    }
+  });
+});
+
+describe("roadCarveLayer", () => {
+  // This test is the belt, not a backstop for one. carveAt() has no runtime clearance
+  // clamp: the guarantee that ground never rises above the road is proved by construction
+  // instead (a flat-core falloff makes the nearest tier's weight exactly 1 on its own
+  // ribbon, and softMin never exceeds the true min of its inputs — see roadCarveLayer.ts).
+  // This test is what holds that reasoning to account across every stage and ribbon,
+  // rather than a cap silently enforcing it at runtime.
+  it("never returns ground above the road, anywhere on any ribbon", () => {
+    for (const entry of STAGE_LIST) {
+      const spline = new TrackSpline(getStageDef(entry.id));
+      const index = buildRoadIndex(spline, 1);
+
+      const allSamples = spline.getAllSamples();
+      for (let si = 0; si < allSamples.length; si += SAMPLE_STRIDE) {
+        const s = allSamples[si];
+        // Stand-in for the land layer: a constant well above the local road. Only the
+        // continuity test below needs landAt to actually vary with distance.
+        const landAt = () => s.y + 200;
+        for (let lat = -(s.halfWidth + 1.2); lat <= s.halfWidth + 1.2; lat += 0.4) {
+          const x = s.x + s.normalX * lat;
+          const z = s.z + s.normalZ * lat;
+          const r = carveAt(x, z, index, landAt);
+          assert.ok(
+            r.height <= s.y - 0.25 + 1e-6,
+            `${entry.id} s=${s.s} lat=${lat.toFixed(1)}: ground ${r.height.toFixed(3)} above road ${s.y.toFixed(3)}`
+          );
+        }
+      }
+    }
+  });
+
+  it("stays below BOTH tiers in the gap between stacked switchbacks", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    const index = buildRoadIndex(spline, 1);
+    const all = spline.getAllSamples();
+
+    // Find a point where two road tiers are within 60 m of each other laterally.
+    let probes = 0;
+    for (let i = 0; i < all.length; i += 25) {
+      const s = all[i];
+      // Stand-in for the land layer: a constant well above the local road.
+      const landAt = () => s.y + 200;
+      for (let lat = 8; lat < 60; lat += 4) {
+        for (const side of [-1, 1]) {
+          const x = s.x + s.normalX * lat * side;
+          const z = s.z + s.normalZ * lat * side;
+          const hits = index.query(x, z, CARVE_RADIUS);
+          const tiers = hits.filter((h) => Math.abs(h.sample.s - s.s) > 200);
+          if (tiers.length === 0) continue;
+
+          probes++;
+          const h = carveAt(x, z, index, landAt).height;
+          for (const t of tiers) {
+            if (t.dist > t.sample.halfWidth + 1.2) continue;
+            assert.ok(
+              h <= t.sample.y - 0.25 + 1e-6,
+              `ground ${h.toFixed(2)} intrudes on opposing tier at s=${t.sample.s}`
+            );
+          }
+        }
+      }
+    }
+    assert.ok(probes > 50, `expected many stacked-tier probes, got ${probes}`);
+  });
+
+  it("falls to zero weight beyond the carve radius", () => {
+    const spline = new TrackSpline(getStageDef("borbera-sprint"));
+    const index = buildRoadIndex(spline, 1);
+    const s = spline.getAllSamples()[400];
+    const landAt = () => s.y + 200;
+    const far = carveAt(s.x + s.normalX * 400, s.z + s.normalZ * 400, index, landAt);
+    assert.equal(far.weight, 0);
+  });
+
+  it("is continuous across the medial axis between two tiers", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    const index = buildRoadIndex(spline, 1);
+    const s = spline.getAllSamples()[600];
+
+    // Stand-in for the land layer. Unlike the other tests' constant stub, this one must
+    // actually be a continuous function of the distance it is handed: carveAt() now
+    // blends toward whatever landAt(nearestDist) returns, so a discontinuous or constant
+    // stub here would test the stub's shape instead of the layer's continuity.
+    //
+    // It must saturate to its asymptotic value strictly BELOW CARVE_RADIUS (90 m), not
+    // at it: carveAt's hits.length === 0 branch reports nearestDist as Infinity (it
+    // never queried past the radius to find the true distance), so landAt(Infinity) must
+    // already equal what landAt returns for a hit sitting right at the radius edge, or
+    // the hits/no-hits transition itself becomes a fresh discontinuity.
+    const landAt = (nearestDist: number) => s.y + 200 + 0.05 * Math.min(nearestDist, 60);
+
+    // The sweep below can pass near any sample within CARVE_RADIUS along this stage, not
+    // just s, so the tolerance is derived from the stage's steepest legitimate slope
+    // (maxLegitSlope), not one sample's. A real cliff is allowed; a wedge discontinuity
+    // (the defect rounds 1-3 fixed) is not.
+    const step = 0.5;
+    const tolerance = maxLegitSlope(spline) * 1.25 * step;
+
+    let prev = carveAt(s.x - s.normalX * 120, s.z - s.normalZ * 120, index, landAt).height;
+    for (let lat = -119.5; lat <= 120; lat += step) {
+      const h = carveAt(s.x + s.normalX * lat, s.z + s.normalZ * lat, index, landAt).height;
+      assert.ok(
+        Math.abs(h - prev) < tolerance,
+        `carve jumped ${Math.abs(h - prev).toFixed(2)} m at lat ${lat} (tolerance ${tolerance.toFixed(2)} m)`
+      );
+      prev = h;
     }
   });
 });
