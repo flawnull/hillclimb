@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
 import { buildRoadIndex } from "../src/game/track/terrain/roadIndex";
+import { profileHeightAt, VERGE_WIDTH, ROAD_CLEARANCE } from "../src/game/track/terrain/layers/roadProfile";
 
 describe("RoadIndex", () => {
   it("returns exactly the samples a brute-force scan would return", () => {
@@ -88,5 +89,42 @@ describe("RoadIndex", () => {
     assert.equal(index.bounds.maxX, maxX, "bounds.maxX mismatch");
     assert.equal(index.bounds.minZ, minZ, "bounds.minZ mismatch");
     assert.equal(index.bounds.maxZ, maxZ, "bounds.maxZ mismatch");
+  });
+});
+
+describe("roadProfile", () => {
+  it("keeps the ribbon and verge below the road surface", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    for (const s of spline.getAllSamples()) {
+      for (const lat of [0, 1, s.halfWidth * 0.5, s.halfWidth, s.halfWidth + VERGE_WIDTH]) {
+        for (const side of [-1, 1]) {
+          const h = profileHeightAt(s, lat * side);
+          assert.ok(
+            h <= s.y - ROAD_CLEARANCE + 1e-9,
+            `lat ${lat * side} at s=${s.s}: ground ${h} is not below road ${s.y}`
+          );
+        }
+      }
+    }
+  });
+
+  it("rises on the cut side and falls on the exposed side", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    const exposed = spline.getAllSamples().find((s) => s.exposure === "left");
+    assert.ok(exposed, "stage should contain a left-exposed section");
+
+    assert.ok(profileHeightAt(exposed!, -40) < exposed!.y - 5, "left side should drop away");
+    assert.ok(profileHeightAt(exposed!, 40) > exposed!.y, "right side should cut into the hill");
+  });
+
+  it("is continuous in lat", () => {
+    const spline = new TrackSpline(getStageDef("borbera-sprint"));
+    const s = spline.getAllSamples()[500];
+    let prev = profileHeightAt(s, -260);
+    for (let lat = -259.5; lat <= 260; lat += 0.5) {
+      const h = profileHeightAt(s, lat);
+      assert.ok(Math.abs(h - prev) < 2.0, `jump of ${Math.abs(h - prev)} m at lat ${lat}`);
+      prev = h;
+    }
   });
 });
