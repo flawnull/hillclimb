@@ -5,6 +5,7 @@ import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
 import { buildRoadIndex } from "../src/game/track/terrain/roadIndex";
 import { profileHeightAt, VERGE_WIDTH, ROAD_CLEARANCE } from "../src/game/track/terrain/layers/roadProfile";
+import { buildBaseAltitude } from "../src/game/track/terrain/layers/baseAltitude";
 
 describe("RoadIndex", () => {
   it("returns exactly the samples a brute-force scan would return", () => {
@@ -137,6 +138,47 @@ describe("roadProfile", () => {
       const h = profileHeightAt(s, lat);
       assert.ok(Math.abs(h - prev) < 2.0, `jump of ${Math.abs(h - prev)} m at lat ${lat}`);
       prev = h;
+    }
+  });
+});
+
+describe("baseAltitude", () => {
+  it("tracks the road's altitude near the road", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    const base = buildBaseAltitude(spline, 2500);
+    const all = spline.getAllSamples();
+
+    for (let i = 20; i < all.length - 20; i += 50) {
+      const s = all[i];
+      const h = base.sample(s.x, s.z);
+      assert.ok(
+        Math.abs(h - s.y) < 260,
+        `at s=${s.s} base altitude ${h.toFixed(0)} is far from road ${s.y.toFixed(0)}`
+      );
+    }
+  });
+
+  it("is continuous", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    const base = buildBaseAltitude(spline, 2500);
+    const s = spline.getAllSamples()[400];
+
+    let prev = base.sample(s.x - 500, s.z);
+    for (let dx = -499; dx <= 500; dx += 1) {
+      const h = base.sample(s.x + dx, s.z);
+      assert.ok(Math.abs(h - prev) < 2.5, `base altitude jumped ${Math.abs(h - prev)} m at dx=${dx}`);
+      prev = h;
+    }
+  });
+
+  it("is deterministic", () => {
+    const spline = new TrackSpline(getStageDef("cresta-ebro"));
+    const a = buildBaseAltitude(spline, 2500);
+    const b = buildBaseAltitude(spline, 2500);
+    const s = spline.getAllSamples()[100];
+    for (let i = 0; i < 50; i++) {
+      const x = s.x + i * 37, z = s.z - i * 53;
+      assert.equal(a.sample(x, z), b.sample(x, z));
     }
   });
 });
