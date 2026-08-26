@@ -27,8 +27,11 @@ export function buildBaseAltitude(spline: TrackSpline, padding: number): BaseAlt
   const route: SplineSample[] = [];
   for (let i = 0; i < all.length; i += stride) route.push(all[i]);
 
+  // Compute exact bounding box from every sample, not just the strided route.
+  // IDW is smooth enough over strided points, but bounds must cover the entire route
+  // to remain correct regardless of future padding or stride choices.
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-  for (const s of route) {
+  for (const s of all) {
     if (s.x < minX) minX = s.x;
     if (s.x > maxX) maxX = s.x;
     if (s.z < minZ) minZ = s.z;
