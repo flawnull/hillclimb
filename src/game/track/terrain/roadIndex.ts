@@ -107,10 +107,6 @@ export function buildRoadIndex(spline: TrackSpline, stride: number = 1): RoadInd
         if (found.length > 0) {
           let best = found[0];
           for (const h of found) if (h.dist < best.dist) best = h;
-          // The true nearest can sit just outside `radius` only if nothing was found
-          // inside it, so one confirming pass at best.dist + CELL is enough.
-          const confirm = this.query(x, z, best.dist + CELL);
-          for (const h of confirm) if (h.dist < best.dist) best = h;
           return best;
         }
         radius *= 2;

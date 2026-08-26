@@ -70,4 +70,23 @@ describe("RoadIndex", () => {
     assert.ok(right.lat > 8, `expected positive lat, got ${right.lat}`);
     assert.ok(left.lat < -8, `expected negative lat, got ${left.lat}`);
   });
+
+  it("bounds accurately cover the spline's extent", () => {
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
+    const index = buildRoadIndex(spline, 1);
+    const all = spline.getAllSamples();
+
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const s of all) {
+      if (s.x < minX) minX = s.x;
+      if (s.x > maxX) maxX = s.x;
+      if (s.z < minZ) minZ = s.z;
+      if (s.z > maxZ) maxZ = s.z;
+    }
+
+    assert.equal(index.bounds.minX, minX, "bounds.minX mismatch");
+    assert.equal(index.bounds.maxX, maxX, "bounds.maxX mismatch");
+    assert.equal(index.bounds.minZ, minZ, "bounds.minZ mismatch");
+    assert.equal(index.bounds.maxZ, maxZ, "bounds.maxZ mismatch");
+  });
 });
