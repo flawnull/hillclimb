@@ -6,7 +6,7 @@
 
 import * as THREE from "three";
 import { TrackSpline } from "./TrackSpline";
-import { terrainHeightAt } from "./Terrain";
+import { HeightField } from "./terrain/heightField";
 
 const colorGeo = (geo: THREE.BufferGeometry, hex: string): THREE.BufferGeometry => {
   const col = new THREE.Color(hex);
@@ -68,7 +68,11 @@ const mergeGeometries = (geos: THREE.BufferGeometry[]): THREE.BufferGeometry => 
   return combinedGeo;
 };
 
-export function buildInstancedVegetation(spline: TrackSpline, vegetationGroup: THREE.Group): void {
+export function buildInstancedVegetation(
+  spline: TrackSpline,
+  field: HeightField,
+  vegetationGroup: THREE.Group
+): void {
   const samples = spline.getAllSamples();
   const count = Math.min(450, Math.floor(samples.length * 1.1));
 
@@ -150,8 +154,10 @@ export function buildInstancedVegetation(spline: TrackSpline, vegetationGroup: T
         continue;
       }
 
-      // Embed slightly into ground (-0.6) to avoid floating above coarse terrain mesh triangles
-      const posY = terrainHeightAt(proj.sample, proj.t) - 0.6;
+      // Ground at the tree's ACTUAL world position. The previous code grounded against a
+      // road-relative height, which on a sweeper could resolve to a different station
+      // entirely and left trees floating by up to 135 m.
+      const posY = field.heightAt(posX, pz) - 0.35;
 
       const scale = 0.85 + rand * 0.45;
       dummy.position.set(posX, posY, pz);
@@ -160,7 +166,7 @@ export function buildInstancedVegetation(spline: TrackSpline, vegetationGroup: T
       dummy.updateMatrix();
 
       if (isRiverSide && rand > 0.65 && rockIdx < count) {
-        dummy.position.y = posY + 0.6;
+        dummy.position.y = posY + 0.35;
         dummy.scale.set(1.2 + rand * 0.6, 0.7 + rand * 0.4, 1.2 + rand * 0.6);
         dummy.updateMatrix();
         rockMesh.setMatrixAt(rockIdx++, dummy.matrix);

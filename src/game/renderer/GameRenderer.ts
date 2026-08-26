@@ -8,7 +8,7 @@ import { Engine, EngineRenderState } from "../Engine";
 import { CarDef } from "../vehicle/cars";
 import { TrackSpline } from "../track/TrackSpline";
 import { RoadMesh } from "../track/RoadMesh";
-import { Terrain } from "../track/Terrain";
+import { TerrainSystem } from "../track/terrain/TerrainSystem";
 import { QualityTier } from "@/store/gameStore";
 import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
@@ -26,7 +26,7 @@ export class GameRenderer {
 
   // Track & Terrain Scene Graph
   private roadMesh: RoadMesh | null = null;
-  private terrain: Terrain | null = null;
+  private terrain: TerrainSystem | null = null;
   private trackGroup: THREE.Group;
 
   // Modular Subsystems
@@ -149,11 +149,12 @@ export class GameRenderer {
     this.trackGroup.add(this.roadMesh.guardrailGroup);
     this.trackGroup.add(this.roadMesh.landmarkGroup);
 
-    // 2. Build Corridor Terrain & Altitude-Banded Vegetation + River + Distant Mountains
-    this.terrain = new Terrain(spline);
+    // 2. Build the unified terrain surface, river and vegetation. There is no separate
+    // backdrop mesh: near ground and distant mountains are one continuous surface.
+    this.terrain?.dispose();
+    this.terrain = new TerrainSystem(spline);
     this.trackGroup.add(this.terrain.mesh);
-    if (this.terrain.riverMesh) this.trackGroup.add(this.terrain.riverMesh);
-    if (this.terrain.backdropMesh) this.trackGroup.add(this.terrain.backdropMesh);
+    this.trackGroup.add(this.terrain.riverMesh);
     this.trackGroup.add(this.terrain.vegetationGroup);
   }
 

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { TrackSpline, SplineSample } from "./TrackSpline";
-import { terrainHeightAt } from "./Terrain";
+import { profileHeightAt as terrainHeightAt } from "./terrain/layers/roadProfile";
 import { batchStaticGroup, chunkMeshBySpace } from "./batchStatics";
 import { createTwoLaneRoadTexture } from "./RoadTextureGenerator";
 import { buildRoadsideFurniture } from "./RoadsideFurnitureBuilder";
