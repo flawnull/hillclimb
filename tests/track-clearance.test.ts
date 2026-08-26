@@ -15,7 +15,7 @@ import * as THREE from "three";
 import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
 import { RoadMesh } from "../src/game/track/RoadMesh";
-import { Terrain } from "../src/game/track/Terrain";
+import { TerrainSystem } from "../src/game/track/terrain/TerrainSystem";
 
 describe("Roadway Clearance & Obstacle Safety", () => {
   for (const entry of STAGE_LIST) {
@@ -24,7 +24,7 @@ describe("Roadway Clearance & Obstacle Safety", () => {
       const spline = new TrackSpline(stageDef);
 
       it("zero vegetation instances intersect or obstruct the road carriageway", () => {
-        const terrain = new Terrain(spline);
+        const terrain = new TerrainSystem(spline);
         const vegGroup = terrain.vegetationGroup;
 
         let totalInstances = 0;

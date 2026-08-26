@@ -16,6 +16,10 @@
 # AI/Agent Configs
 .agents/
 .claude/
+.superpowers/
+
+# Terrain visual diagnostics output
+/scratch/visual/
 
 # Debug logs
 npm-debug.log*

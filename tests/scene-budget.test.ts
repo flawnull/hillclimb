@@ -21,33 +21,42 @@ import * as THREE from "three";
 import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
 import { RoadMesh } from "../src/game/track/RoadMesh";
-import { Terrain } from "../src/game/track/Terrain";
+import { TerrainSystem } from "../src/game/track/terrain/TerrainSystem";
 import { countRenderables } from "../src/game/track/batchStatics";
 
-/** Renderable objects a stage may build. Draw calls per frame are a subset of this. */
+/** Renderable objects a stage may build. Draw calls per frame are a subset of this.
+ *  Raised for the unified height field (Task 8): buildChunkedTerrain spatially chunks the
+ *  graded quadtree into many small meshes so the frustum culler can reject distant ones,
+ *  which trades a higher static mesh count for far fewer triangles drawn per frame.
+ *  Measured totals are 1287 / 1421 / 1246; ceilings keep ~15% headroom. */
 const MAX_MESHES: Record<string, number> = {
-  "borbera-sprint": 300,
-  "salita-cosola": 520,
-  "cresta-ebro": 300,
+  "borbera-sprint": 1_500,
+  "salita-cosola": 1_650,
+  "cresta-ebro": 1_450,
 };
 
 /** Total triangles in a stage. Only a fraction is visible at once, but this bounds memory
  *  and the worst case where a long climb is in view all at once. */
-//  Lowered after the §13.3 road/prop decimation pass: the ribbon now emits a cross-section
-//  only when the heading turns ~1.5 deg or 6 m of arc passes (was: every ~1.2 m spline
-//  sample), and roadside posts use 6 radial segments instead of THREE's 32-segment default.
-//  Salita di Cosola went 559,382 -> 262,122 triangles. Measured totals are
-//  82,476 / 262,122 / 92,164; the ceilings keep ~15% headroom for scenery work.
+//  Task 8 replaced the road-relative corridor + separate mountain backdrop with one
+//  unified height-field terrain (world-space quadtree, Task 6/7). The old corridor could
+//  be anisotropic — dense across the road, coarse off to the sides, with a wholly separate
+//  low-poly backdrop mesh for the distant horizon. The new field is a single surface graded
+//  uniformly by distance from the road in every direction, and ~18-21% of its triangles are
+//  vertical LOD skirts that close cracks between quadtree cells of different sizes — neither
+//  of which the old corridor had to pay for. Old combined totals (road + corridor + backdrop
+//  + river + vegetation) were 82,476 / 262,122 / 92,164. New combined totals (road + unified
+//  field + river + vegetation) are 74,432 / 282,462 / 81,696; the ceilings keep ~15% headroom
+//  for scenery work.
 const MAX_TRIANGLES: Record<string, number> = {
-  "borbera-sprint": 95_000,
-  "salita-cosola": 300_000,
-  "cresta-ebro": 106_000,
+  "borbera-sprint": 86_000,
+  "salita-cosola": 325_000,
+  "cresta-ebro": 94_000,
 };
 
 function buildStageScene(stageId: string) {
   const spline = new TrackSpline(getStageDef(stageId));
   const road = new RoadMesh(spline);
-  const terrain = new Terrain(spline);
+  const terrain = new TerrainSystem(spline);
 
   const root = new THREE.Group();
   root.add(
@@ -56,7 +65,6 @@ function buildStageScene(stageId: string) {
     road.guardrailGroup,
     terrain.mesh,
     terrain.riverMesh,
-    terrain.backdropMesh,
     terrain.vegetationGroup
   );
   return { root, spline };
@@ -120,7 +128,7 @@ describe("Scene budget", () => {
     // straight through the hillside to the sky. Borbera Sprint shipped 1,076 of them.
     for (const stageId of ["borbera-sprint", "salita-cosola"]) {
       const spline = new TrackSpline(getStageDef(stageId));
-      const terrain = new Terrain(spline);
+      const terrain = new TerrainSystem(spline);
 
       for (const [label, root] of [["corridor", terrain.mesh], ["river", terrain.riverMesh]] as const) {
         let down = 0;

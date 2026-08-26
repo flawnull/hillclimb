@@ -18,7 +18,7 @@ Instead of relying on black-box physics libraries, the vehicle dynamics are simu
 
 ### 2. Procedural 3D Generation & Rendering
 - **Spline-Based Track Generation**: The road geometry, complex switchbacks (tornanti), and varying camber are generated dynamically at runtime from Frenet-Serret frames along mathematical splines.
-- **Dynamic Terrain & Frustum Culling**: The surrounding mountain terrain is generated dynamically alongside the road tier. The mesh is chunked optimally to allow the WebGL frustum culler to aggressively reject unseen geometry, ensuring a rock-solid 60 FPS in the browser.
+- **Unified Height-Field Terrain**: Near ground and distant mountains are one continuous surface — a single height field sampled by a single mesh builder, rather than two independently-generated surfaces that have to be kept in visual agreement. The field composes a base-altitude layer, a world-space ridge layer, and a road-carve layer that takes a minimum over every road tier within 90 m (each faded toward the surrounding landscape by its own falloff), which is what guarantees the ground stays below every nearby road, including both tiers of a stacked switchback. Ground clearance beneath the road is a property of the field itself rather than a post-process, so terrain intruding on the racing line is unrepresentable rather than merely tuned away. Geometry is built as a distance-graded quadtree — 4 m cells at the roadside easing out to 256 m at the horizon, with LOD skirts closing the seams between cell sizes — then spatially chunked so the WebGL frustum culler can still reject unseen geometry. Measured per-stage terrain triangle counts run 42k–82k (about a fifth of that is skirts), with full-scene totals (road, terrain, vegetation) of 74k–282k across the three stages.
 - **Procedural Textures**: Utilizing the HTML5 Canvas API to generate high-frequency micro-detail noise maps and asphalt grain procedurally, drastically reducing network payload size without sacrificing visual fidelity.
 
 ### 3. Dynamic WebAudio Synthesis
@@ -60,4 +60,4 @@ The custom physics and rendering budgets are strictly enforced by a comprehensiv
 ```bash
 npm test
 ```
-*(Currently 127/127 physics, rendering, and mathematical constraint tests passing).*
+*(Currently 163/163 physics, rendering, and mathematical constraint tests passing).*
