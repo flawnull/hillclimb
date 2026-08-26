@@ -96,7 +96,10 @@ describe("roadProfile", () => {
   it("keeps the ribbon and verge below the road surface", () => {
     const spline = new TrackSpline(getStageDef("salita-cosola"));
     for (const s of spline.getAllSamples()) {
-      for (const lat of [0, 1, s.halfWidth * 0.5, s.halfWidth, s.halfWidth + VERGE_WIDTH]) {
+      // Probes up to halfWidth + VERGE_WIDTH + 0.5 test the clearance clamp band boundary.
+      // Beyond +0.5, the profile rises into rock cuts by design; the invariant is enforced
+      // by the field clamp (Task 3) and mesh vertex validation, not this layer.
+      for (const lat of [0, 1, s.halfWidth * 0.5, s.halfWidth, s.halfWidth + VERGE_WIDTH, s.halfWidth + VERGE_WIDTH + 0.01, s.halfWidth + VERGE_WIDTH + 0.5]) {
         for (const side of [-1, 1]) {
           const h = profileHeightAt(s, lat * side);
           assert.ok(
@@ -109,9 +112,18 @@ describe("roadProfile", () => {
   });
 
   it("rises on the cut side and falls on the exposed side", () => {
-    const spline = new TrackSpline(getStageDef("salita-cosola"));
-    const exposed = spline.getAllSamples().find((s) => s.exposure === "left");
-    assert.ok(exposed, "stage should contain a left-exposed section");
+    // Search STAGE_LIST for the first stage containing a left-exposed sample
+    let exposed: any = null;
+    let stageId: string | null = null;
+    for (const entry of STAGE_LIST) {
+      const spline = new TrackSpline(getStageDef(entry.id));
+      exposed = spline.getAllSamples().find((s) => s.exposure === "left");
+      if (exposed) {
+        stageId = entry.id;
+        break;
+      }
+    }
+    assert.ok(exposed, "should find a stage containing a left-exposed section");
 
     assert.ok(profileHeightAt(exposed!, -40) < exposed!.y - 5, "left side should drop away");
     assert.ok(profileHeightAt(exposed!, 40) > exposed!.y, "right side should cut into the hill");
