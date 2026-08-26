@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="peak1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="peak2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="230" fill="none" stroke="#f59e0b" stroke-width="8" stroke-dasharray="16 8"/>
+  <polygon points="120,380 256,150 392,380" fill="url(#peak1)"/>
+  <polygon points="60,380 170,220 280,380" fill="url(#peak2)" opacity="0.85"/>
+  <polygon points="260,380 360,250 460,380" fill="url(#peak2)" opacity="0.85"/>
+  <path d="M 230,380 Q 256,290 256,220 Q 256,290 282,380 Z" fill="#1e293b"/>
+  <path d="M 256,230 L 256,380" stroke="#ffffff" stroke-width="4" stroke-dasharray="12 12"/>
+</svg>

@@ -1,0 +1,338 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #090d16;
+  --foreground: #f8fafc;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  touch-action: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Ensure mobile browser viewport height behaves properly without rubber-banding */
+body {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* Custom scrollbars for menus */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.5);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.8);
+}
+
+/* ============================================================================
+ * HUD LAYOUT SYSTEM (§9.1)
+ * ----------------------------------------------------------------------------
+ * Every HUD element used to be positioned independently with `fixed`/`absolute`
+ * corners. At phone-portrait sizes those corners collide: the stage banner ran
+ * under the timer, the steering pad ran under the speedometer, and the
+ * handbrake disappeared behind it.
+ *
+ * The fix is structural: ONE grid owns the whole overlay, and every panel is
+ * placed in a named area. Grid areas cannot overlap, so no combination of
+ * viewport size and content length can reproduce those collisions. Sizes are
+ * clamped and columns are minmax(0,1fr) so panels shrink instead of pushing
+ * their neighbours out of the box.
+ * ========================================================================== */
+
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  --hud-pad: 0.6rem;
+  --hud-gap: 0.5rem;
+
+  /* Landscape: the canvas is full-bleed and the controls float over it. */
+  --stage-h: 100%;
+  --dock-h: auto;
+  /* Height of the speed/gear strip at the top of the portrait dock. */
+  --speedo-h: 3.1rem;
+
+  /* Minimum touch target for driving controls (§9.1). */
+  --drive-min: 64px;
+  /* Secondary HUD chrome (mute, reset, tuning...). */
+  --chrome-min: 40px;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --chrome-min: 48px;
+  }
+}
+
+/* Portrait is supported, never blocked: canvas gets the top 62%, the control
+ * dock the bottom 38% (§9.1). */
+@media (orientation: portrait) {
+  :root {
+    --stage-h: 62%;
+    --dock-h: 38%;
+  }
+}
+
+/* Very short viewports (landscape phones, tiny embeds): drop the altimeter and
+ * compact the speedometer so the rows still fit without piling up. */
+@media (max-height: 560px) and (orientation: landscape) {
+  :root {
+    --hud-pad: 0.375rem;
+    --hud-gap: 0.375rem;
+  }
+}
+
+/* Below the supported floor (360x640) targets shrink rather than overflow. */
+@media (max-height: 340px), (max-width: 330px) {
+  :root {
+    --drive-min: 48px;
+    --chrome-min: 36px;
+    --hud-pad: 0.25rem;
+    --hud-gap: 0.25rem;
+  }
+}
+
+.hud-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* The 3D canvas layer. Full height in landscape, top 62% in portrait. */
+.hud-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--stage-h);
+  z-index: 0;
+}
+
+/* Solid backing behind the portrait control dock so controls read against the
+ * chrome instead of against moving scenery. Absent in landscape. */
+.hud-dock-bg {
+  display: none;
+}
+
+@media (orientation: portrait) {
+  .hud-dock-bg {
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--dock-h);
+    z-index: 5;
+    background: linear-gradient(to bottom, rgb(2 6 23 / 0.92), rgb(2 6 23 / 0.99));
+    border-top: 1px solid rgb(30 41 59 / 0.9);
+  }
+}
+
+.hud-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  gap: var(--hud-gap);
+  padding:
+    calc(var(--hud-pad) + var(--safe-t))
+    calc(var(--hud-pad) + var(--safe-r))
+    calc(var(--hud-pad) + var(--safe-b))
+    calc(var(--hud-pad) + var(--safe-l));
+  pointer-events: none;
+
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto var(--dock-h);
+  grid-template-areas:
+    "topleft  timer     topright"
+    "hint     hint      hint"
+    "midleft  .         midright"
+    ".        .         speedo"
+    "botleft  botcenter botright";
+}
+
+/* Narrow viewports: the banner, timer and action cluster cannot share one row,
+ * so the timer takes a row of its own above them. */
+@media (max-width: 700px) {
+  .hud-grid {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto var(--dock-h);
+    grid-template-areas:
+      "timer    timer     timer"
+      "topleft  topright  topright"
+      "hint     hint      hint"
+      "midleft  .         midright"
+      "speedo   speedo    speedo"
+      "botleft  botcenter botright";
+  }
+}
+
+.hud-topleft   { grid-area: topleft;   justify-self: start;  align-self: start; min-width: 0; }
+.hud-hint      { grid-area: hint;      justify-self: center; align-self: start; min-width: 0; max-width: 100%; }
+.hud-timer     { grid-area: timer;     justify-self: center; align-self: start; min-width: 0; }
+.hud-topright  { grid-area: topright;  justify-self: end;    align-self: start; }
+.hud-midleft   { grid-area: midleft;   justify-self: start;  align-self: end; min-height: 0; }
+.hud-midright  { grid-area: midright;  justify-self: end;    align-self: center; min-height: 0; height: 100%; }
+.hud-speedo    { grid-area: speedo;    justify-self: center; align-self: end; min-width: 0; }
+.hud-botleft   { grid-area: botleft;   justify-self: start;  align-self: end; min-width: 0; }
+.hud-botcenter { grid-area: botcenter; justify-self: center; align-self: end; }
+.hud-botright  { grid-area: botright;  justify-self: end;    align-self: end; }
+
+/* In portrait the speedometer used to float over the canvas, hard right, at 240px —
+ * squarely on top of the car, while the control dock below it sat two-thirds empty.
+ * Move it into the dock as a full-width strip along the top of that band: the canvas is
+ * handed back to the game, and the dock's wasted space now carries the readout.
+ *
+ * The strip is the top slice of the dock rather than a row above it, so .hud-dock-bg
+ * still paints one continuous band behind both. */
+@media (orientation: portrait) {
+  .hud-grid {
+    grid-template-rows:
+      auto auto auto
+      minmax(0, 1fr)
+      var(--speedo-h)
+      calc(var(--dock-h) - var(--speedo-h));
+  }
+
+  .hud-speedo {
+    justify-self: stretch;
+    align-self: center;
+    z-index: 6;
+  }
+
+  /* Re-flow the readout from a right-aligned column into a wide, short row. */
+  .hud-speedo > div {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.3rem 0.85rem;
+    border-radius: 0.9rem;
+  }
+}
+
+/* Landscape keeps the original bottom-right cluster — at EVERY landscape width. The
+ * width cap on this rule left the base `justify-self: center` in force on phone
+ * landscape (844x390), parking the readout in the middle of the canvas on top of the
+ * car and the start button. */
+@media (orientation: landscape) {
+  /* The speedo area sits in the RIGHT column (see the base template). justify-self alone
+     was not enough: while the area was the centre column, `end` only pushed the readout
+     to the right edge of that middle track, leaving it over the car. */
+  .hud-speedo { justify-self: end; }
+}
+
+/* Dock children stretch to fill the 38% band in portrait. */
+@media (orientation: portrait) {
+  .hud-botleft,
+  .hud-botcenter,
+  .hud-botright {
+    align-self: stretch;
+  }
+  .hud-botleft { justify-self: stretch; }
+}
+
+@media (orientation: landscape) {
+  .hud-hint { display: none; }
+}
+
+/* --- Touch controls -------------------------------------------------------- */
+
+/* `display: contents` lets TouchControls own the pointer logic while its three
+ * groups are placed directly into the HUD grid areas above. */
+.hud-controls { display: contents; }
+
+.hud-steer {
+  pointer-events: auto;
+  width: clamp(150px, 26vw, 260px);
+  height: clamp(var(--drive-min), 20vh, 190px);
+}
+
+@media (orientation: portrait) {
+  .hud-steer {
+    width: 100%;
+    height: 100%;
+    min-height: var(--drive-min);
+  }
+}
+
+.hud-pedal {
+  min-width: var(--drive-min);
+  min-height: var(--drive-min);
+  width: clamp(var(--drive-min), 12vw, 104px);
+}
+
+.hud-pedal-gas { height: clamp(var(--drive-min), 13vh, 116px); }
+.hud-pedal-brake { height: clamp(var(--drive-min), 10vh, 88px); }
+
+.hud-handbrake {
+  min-width: var(--drive-min);
+  min-height: var(--drive-min);
+}
+
+/* --- Chrome buttons -------------------------------------------------------- */
+
+.hud-btn {
+  min-width: var(--chrome-min);
+  min-height: var(--chrome-min);
+}
+
+/* --- Altimeter ------------------------------------------------------------- */
+
+.hud-altimeter-strip {
+  height: 100%;
+  max-height: 16rem;
+  min-height: 0;
+}
+
+@media (max-height: 560px) and (orientation: landscape) {
+  .hud-midright { display: none; }
+}
+
+/* Countdown / full-screen flashes are centred on the canvas region, not on the
+ * portrait control dock. */
+.hud-stage-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--stage-h);
+}
+
+/* Compact speedometer on short viewports: drop the LED bar and telemetry rows
+ * so the panel stays under ~64px tall. */
+@media (max-height: 560px) {
+  .hud-speedo-extra { display: none; }
+}
