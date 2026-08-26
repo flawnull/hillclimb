@@ -356,21 +356,46 @@ describe("roadCarveLayer", () => {
     // the hits/no-hits transition itself becomes a fresh discontinuity.
     const landAt = (nearestDist: number) => s.y + 200 + 0.05 * Math.min(nearestDist, 60);
 
-    // The sweep below can pass near any sample within CARVE_RADIUS along this stage, not
-    // just s, so the tolerance is derived from the stage's steepest legitimate slope
-    // (maxLegitSlope), not one sample's. A real cliff is allowed; a wedge discontinuity
-    // (the defect rounds 1-3 fixed) is not.
+    // The tolerance at each step is derived from the samples the layer actually combines
+    // at that point, not a whole-stage bound: a whole-stage maxLegitSlope is dominated by
+    // whichever single sample on the stage has the deepest declared dropDepth, wherever it
+    // happens to be, which can make the bound near-vacuous everywhere else on the stage
+    // (measured: salita-cosola's whole-stage bound is ~28 m per 0.5 m step, driven by one
+    // sample far from where this sweep runs, against a genuine local cliff of ~3.3 m).
+    // Bounding by the union of hits actually queried at the current and previous probe —
+    // exactly what carveAt() itself combines — keeps the test tight where it runs while
+    // still comfortably admitting any real cliff the layer can legitimately produce there.
     const step = 0.5;
-    const tolerance = maxLegitSlope(spline) * 1.25 * step;
 
-    let prev = carveAt(s.x - s.normalX * 120, s.z - s.normalZ * 120, index, landAt).height;
+    function toleranceFor(px: number, pz: number, prevPx: number, prevPz: number): number {
+      let max = 0;
+      for (const h of index.query(px, pz, CARVE_RADIUS)) {
+        const slope = maxLegitSlopeForSample(h.sample);
+        if (slope > max) max = slope;
+      }
+      for (const h of index.query(prevPx, prevPz, CARVE_RADIUS)) {
+        const slope = maxLegitSlopeForSample(h.sample);
+        if (slope > max) max = slope;
+      }
+      return max * 1.25 * step;
+    }
+
+    let prevX = s.x - s.normalX * 120, prevZ = s.z - s.normalZ * 120;
+    let prev = carveAt(prevX, prevZ, index, landAt).height;
     for (let lat = -119.5; lat <= 120; lat += step) {
-      const h = carveAt(s.x + s.normalX * lat, s.z + s.normalZ * lat, index, landAt).height;
+      const x = s.x + s.normalX * lat, z = s.z + s.normalZ * lat;
+      const h = carveAt(x, z, index, landAt).height;
+      const tolerance = toleranceFor(x, z, prevX, prevZ);
+      // <= rather than <: when both the current and previous probe have zero hits (far
+      // past CARVE_RADIUS from every tier), both height and tolerance are legitimately 0,
+      // and 0 <= 0 is exactly "no jump", not a violation.
       assert.ok(
-        Math.abs(h - prev) < tolerance,
+        Math.abs(h - prev) <= tolerance,
         `carve jumped ${Math.abs(h - prev).toFixed(2)} m at lat ${lat} (tolerance ${tolerance.toFixed(2)} m)`
       );
       prev = h;
+      prevX = x;
+      prevZ = z;
     }
   });
 });

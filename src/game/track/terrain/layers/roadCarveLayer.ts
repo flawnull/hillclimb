@@ -96,11 +96,24 @@ import { profileHeightAt } from "./roadProfile";
 export const CARVE_RADIUS = 90;
 
 /**
- * Radius within which a hit's falloff weight is exactly 1, not just close to it. The
- * clamp band (halfWidth + VERGE_WIDTH + 0.5, ~5.3 m laterally) plus sample spacing along
- * the spline (~2 m) puts the nearest sample to any in-band point within ~5.4 m; 12 m
- * gives better than 2x margin. This flat core is what makes the clamp above provably
- * unnecessary — see the module doc.
+ * Radius within which a hit's falloff weight is exactly 1, not just close to it. This
+ * flat core is what makes the deleted clearance clamp provably unnecessary — see the
+ * module doc — so it needs to cover every point the clamp used to cover.
+ *
+ * The clamp band was `halfWidth + VERGE_WIDTH + CLAMP_MARGIN`. `halfWidth` is not a
+ * constant: trackBuilder.ts widens the base 3.6 m by 1.8 m at hairpin apexes, and the
+ * observed maximum across all three stages is 5.4 m (borbera-sprint and salita-cosola
+ * both reach it; cresta-ebro tops out at 5.2 m). Worst case is therefore
+ * `max(halfWidth) + VERGE_WIDTH = 5.4 + 1.2 = 6.6 m` (confirmed by direct query: the
+ * worst-case nearest-sample distance at an in-band point is exactly 6.6 m). Against
+ * `CORE_RADIUS = 12`, that is a margin of `12 - 6.6 = 5.4 m`, a ratio of 1.82x — not the
+ * "better than 2x" this comment used to claim, which was derived from the default 3.6 m
+ * `halfWidth` rather than the true observed maximum.
+ *
+ * The guarantee still holds at 1.82x margin. If `halfWidth` ever grows further, the
+ * inequality to re-check is `max(halfWidth) + VERGE_WIDTH < CORE_RADIUS`; the "never
+ * returns ground above the road, anywhere on any ribbon" test in terrain-field.test.ts is
+ * what would catch it if this margin were ever exceeded.
  */
 const CORE_RADIUS = 12;
 
@@ -118,6 +131,18 @@ export interface CarveResult {
   nearestDist: number;
 }
 
+/**
+ * @param landAt Surrounding land height as a function of distance to the nearest road
+ *   sample. CONTRACT: must be constant for `nearestDist >= CARVE_RADIUS`. `nearestDist`
+ *   is computed purely from the CARVE_RADIUS query below — this function never queries
+ *   further to find a true nearest distance — so it jumps from just under CARVE_RADIUS to
+ *   `Infinity` the instant a point leaves the radius (hits.length drops to 0). A `landAt`
+ *   that is still varying at that boundary reintroduces exactly the discontinuity class
+ *   Round 1 fixed, just relocated into the caller. Concretely: `landAt` must have reached
+ *   its asymptotic value by `nearestDist = CARVE_RADIUS` at the latest (saturating a
+ *   margin before it is safer), so that `landAt(CARVE_RADIUS)` and `landAt(Infinity)`
+ *   agree.
+ */
 export function carveAt(
   x: number,
   z: number,
