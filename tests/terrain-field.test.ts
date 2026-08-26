@@ -627,4 +627,35 @@ describe("HeightField", () => {
       }
     }
   });
+
+  // Review finding: sampleAt was added so height and colour can share one spatial query
+  // instead of heightAt and classifyAt each re-deriving it. This pins "behaviour
+  // identical": sampleAt's height/colour must match calling heightAt/classifyAt
+  // separately, exactly, at every probe — including at least one far-field point (beyond
+  // CARVE_RADIUS, no road hits at all) and one in-band point (near-field, carveAt has
+  // hits), since those take different code paths inside sampleAt.
+  it("sampleAt matches heightAt and classifyAt exactly, near field and far field", () => {
+    const spline = new TrackSpline(getStageDef("borbera-sprint"));
+    const field = createHeightField(spline);
+    const all = spline.getAllSamples();
+
+    for (let i = 0; i < all.length; i += 30) {
+      const s = all[i];
+      // 4 (near field, well inside CARVE_RADIUS = 90) and 400 (far field, well beyond it)
+      // cover both branches of sampleAt; 90 itself probes right at the seam.
+      for (const lat of [4, 30, 90, 400, 1200]) {
+        for (const side of [-1, 1]) {
+          const x = s.x + s.normalX * lat * side;
+          const z = s.z + s.normalZ * lat * side;
+
+          const sample = field.sampleAt(x, z);
+          const h = field.heightAt(x, z);
+          const c = field.classifyAt(x, z);
+
+          assert.equal(sample.height, h, `height mismatch at s=${s.s} lat=${lat * side}`);
+          assert.deepEqual(sample.color, c, `colour mismatch at s=${s.s} lat=${lat * side}`);
+        }
+      }
+    }
+  });
 });

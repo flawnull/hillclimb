@@ -65,9 +65,23 @@ export interface TerrainColor {
   b: number;
 }
 
+export interface TerrainSample {
+  height: number;
+  color: TerrainColor;
+}
+
 export interface HeightField {
   heightAt(x: number, z: number): number;
   classifyAt(x: number, z: number): TerrainColor;
+  /**
+   * Height and colour for one point, sharing the single spatial query between them. The
+   * mesh builder needs both at every vertex (Task 7 samples this field at every vertex of
+   * a graded quadtree over the whole play area — the hot path); calling heightAt and
+   * classifyAt separately for the same point costs two to three redundant spatial
+   * queries (see the review finding that added this method, and the comment in
+   * createHeightField below for the exact accounting).
+   */
+  sampleAt(x: number, z: number): TerrainSample;
   distToRoute(x: number, z: number): number;
   bounds: FieldBounds;
   index: RoadIndex;
@@ -79,80 +93,111 @@ export function createHeightField(spline: TrackSpline): HeightField {
 
   const distToRoute = (x: number, z: number): number => index.nearest(x, z).dist;
 
-  const heightAt = (x: number, z: number): number => {
-    // Constant closure (see module doc): ridgeWeightAt is 0 everywhere carveAt can see
-    // (nearestDist <= CARVE_RADIUS = 90 < RIDGE_START = 180), so this reduces to
-    // base.sample(x, z), satisfying carveAt's landAt contract exactly. One spatial query
-    // total, performed inside carveAt.
-    const r = carveAt(x, z, index, () => base.sample(x, z));
+  /**
+   * classifyAt's colour bands are keyed to the WINNING nearest road sample's own fields
+   * (`near.sample.y`, `near.sample.halfWidth`, `near.sample.altitude`) and its exact
+   * distance — not just carveAt's numeric `nearestDist`. Feeds off the same `near` and
+   * `y` sampleAt already has in hand; behaviour is unchanged from the pre-refactor
+   * classifyAt, just extracted so sampleAt can share it.
+   */
+  const colorFor = (near: ReturnType<RoadIndex["nearest"]>, y: number): TerrainColor => {
+    const rel = y - near.sample.y;
+    const alt = near.sample.altitude;
 
+    if (rel < -8 && near.dist > near.sample.halfWidth + 80) {
+      // Valley floor: pale limestone river gravel
+      return { r: 0.80, g: 0.81, b: 0.78 };
+    }
+    if (rel < -2.5) {
+      // Face of the drop: shaded rock and scree
+      const f = Math.min(1, -rel / 75);
+      return { r: 0.34 - f * 0.08, g: 0.35 - f * 0.05, b: 0.28 - f * 0.05 };
+    }
+    if (rel > 4.5 && near.dist < 200) {
+      // Sandstone/limestone cut on the mountain side
+      const cutT = Math.min(1, (rel - 4.5) / 12);
+      return { r: 0.48 + cutT * 0.08, g: 0.44 + cutT * 0.06, b: 0.38 + cutT * 0.05 };
+    }
+
+    // Smooth continuous vegetation gradient with altitude, using the SURFACE's own
+    // altitude in the far field so distant peaks go rocky rather than staying green.
+    const effAlt = near.dist < 200 ? alt : Math.max(alt, y);
+    const altT1 = Math.max(0, Math.min(1, (effAlt - 600) / 400));
+    const altT2 = Math.max(0, Math.min(1, (effAlt - 1000) / 450));
+
+    const lowR = 0.26, lowG = 0.42, lowB = 0.18;
+    const midR = 0.36, midG = 0.47, midB = 0.24;
+    const highR = 0.54, highG = 0.54, highB = 0.42;
+
+    let r = lowR + (midR - lowR) * altT1;
+    let g = lowG + (midG - lowG) * altT1;
+    let b = lowB + (midB - lowB) * altT1;
+
+    r += (highR - r) * altT2;
+    g += (highG - g) * altT2;
+    b += (highB - b) * altT2;
+
+    // Keep the valley floor's own band honest at very low elevations.
+    if (y < VALLEY_FLOOR_ALT + 5) {
+      r = Math.min(1, r + 0.10);
+      g = Math.min(1, g + 0.08);
+      b = Math.min(1, b + 0.10);
+    }
+
+    return { r, g, b };
+  };
+
+  /**
+   * Combined entry point: one carveAt call (one spatial query) plus, always, one
+   * index.nearest call — down from what used to be up to three separate queries when a
+   * caller needed both the height and the colour of the same point (heightAt's own
+   * carveAt query, classifyAt's own index.nearest for `near`, and heightAt's SECOND
+   * index.nearest in the far-field branch when classifyAt called heightAt internally).
+   *
+   * Why `index.nearest` still runs unconditionally rather than only "when the far field
+   * genuinely needs one": CarveResult (roadCarveLayer.ts) exposes only the numeric
+   * `nearestDist`, not the winning RoadHit object, precisely so carveAt itself stays to
+   * one query with no extra allocation on its own hot path. classifyAt's colour bands
+   * need that object's fields (`near.sample.y`, `.halfWidth`, `.altitude`, `near.dist`),
+   * which cannot be recovered from a bare number — so getting them costs one
+   * index.nearest call, exactly the one classifyAt always made on its own before this
+   * refactor. What changes is that this ONE lookup now also supplies the far-field
+   * branch's ridge-weight distance, instead of that branch making its own second,
+   * redundant call — and a caller that only wants sampleAt().height still triggers it,
+   * a small, deliberate cost accepted so heightAt/classifyAt can be simple wrappers with
+   * IDENTICAL behaviour to before (per the review finding's explicit request).
+   */
+  const sampleAt = (x: number, z: number): TerrainSample => {
+    // Constant closure (see module doc above): ridgeWeightAt is 0 everywhere carveAt can
+    // see (nearestDist <= CARVE_RADIUS = 90 < RIDGE_START = 180), so this reduces to
+    // base.sample(x, z), satisfying carveAt's landAt contract exactly.
+    const r = carveAt(x, z, index, () => base.sample(x, z));
+    const near = index.nearest(x, z);
+
+    let height: number;
     if (r.nearestDist === Infinity) {
       // Beyond CARVE_RADIUS: no road tier is near enough to carve anything, so the ridge
       // relief — omitted from the closure above by construction — belongs here instead.
-      // Continuity at the seam (nearestDist == CARVE_RADIUS == 90): the branch above
-      // returns base.sample(x, z) (ridge weight 0 at d=90, since 90 < RIDGE_START=180);
-      // this branch returns base.sample(x, z) + ridgeWeightAt(90) * (...), and
-      // ridgeWeightAt(90) === 0 too — both sides equal base.sample(x, z) exactly.
-      const d = index.nearest(x, z).dist;
-      return base.sample(x, z) + ridgeWeightAt(d) * (RIDGE_BASE + ridgeReliefAt(x, z) * RIDGE_SCALE);
+      // `near.dist` (just fetched above, not a second lookup) is exactly the distance
+      // this branch needs. Continuity at the seam (nearestDist == CARVE_RADIUS == 90):
+      // the branch above returns base.sample(x, z) (ridge weight 0 at d=90, since
+      // 90 < RIDGE_START=180); this branch returns
+      // base.sample(x, z) + ridgeWeightAt(90) * (...), and ridgeWeightAt(90) === 0 too —
+      // both sides equal base.sample(x, z) exactly.
+      height = base.sample(x, z) + ridgeWeightAt(near.dist) * (RIDGE_BASE + ridgeReliefAt(x, z) * RIDGE_SCALE);
+    } else {
+      height = r.height;
     }
 
-    return r.height;
+    return { height, color: colorFor(near, height) };
   };
 
   return {
     bounds: base.bounds,
     index,
     distToRoute,
-    heightAt,
-
-    classifyAt(x, z) {
-      const near = index.nearest(x, z);
-      const y = heightAt(x, z);
-      const rel = y - near.sample.y;
-      const alt = near.sample.altitude;
-
-      if (rel < -8 && near.dist > near.sample.halfWidth + 80) {
-        // Valley floor: pale limestone river gravel
-        return { r: 0.80, g: 0.81, b: 0.78 };
-      }
-      if (rel < -2.5) {
-        // Face of the drop: shaded rock and scree
-        const f = Math.min(1, -rel / 75);
-        return { r: 0.34 - f * 0.08, g: 0.35 - f * 0.05, b: 0.28 - f * 0.05 };
-      }
-      if (rel > 4.5 && near.dist < 200) {
-        // Sandstone/limestone cut on the mountain side
-        const cutT = Math.min(1, (rel - 4.5) / 12);
-        return { r: 0.48 + cutT * 0.08, g: 0.44 + cutT * 0.06, b: 0.38 + cutT * 0.05 };
-      }
-
-      // Smooth continuous vegetation gradient with altitude, using the SURFACE's own
-      // altitude in the far field so distant peaks go rocky rather than staying green.
-      const effAlt = near.dist < 200 ? alt : Math.max(alt, y);
-      const altT1 = Math.max(0, Math.min(1, (effAlt - 600) / 400));
-      const altT2 = Math.max(0, Math.min(1, (effAlt - 1000) / 450));
-
-      const lowR = 0.26, lowG = 0.42, lowB = 0.18;
-      const midR = 0.36, midG = 0.47, midB = 0.24;
-      const highR = 0.54, highG = 0.54, highB = 0.42;
-
-      let r = lowR + (midR - lowR) * altT1;
-      let g = lowG + (midG - lowG) * altT1;
-      let b = lowB + (midB - lowB) * altT1;
-
-      r += (highR - r) * altT2;
-      g += (highG - g) * altT2;
-      b += (highB - b) * altT2;
-
-      // Keep the valley floor's own band honest at very low elevations.
-      if (y < VALLEY_FLOOR_ALT + 5) {
-        r = Math.min(1, r + 0.10);
-        g = Math.min(1, g + 0.08);
-        b = Math.min(1, b + 0.10);
-      }
-
-      return { r, g, b };
-    },
+    sampleAt,
+    heightAt: (x, z) => sampleAt(x, z).height,
+    classifyAt: (x, z) => sampleAt(x, z).color,
   };
 }
