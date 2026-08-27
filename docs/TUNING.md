@@ -1,6 +1,6 @@
 # Val Borbera Hillclimb — Physics Tuning Documentation
 
-All vehicle and simulation constants reside in [`src/game/vehicle/vehicleTuning.ts`](file:///Users/ivank/Desktop/Liguria/src/game/vehicle/vehicleTuning.ts).
+All vehicle and simulation constants reside in [`src/game/vehicle/vehicleTuning.ts`](src/game/vehicle/vehicleTuning.ts).
 
 | Constant | Default Value | Unit / Range | Description & Handling Effect |
 |---|---|---|---|
