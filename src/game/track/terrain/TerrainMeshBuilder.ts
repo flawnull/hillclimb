@@ -45,6 +45,52 @@ export function leafSizeAt(distToRoute: number): number {
   return target < MIN_LEAF ? MIN_LEAF : target > MAX_LEAF ? MAX_LEAF : target;
 }
 
+// RELIEF OVERRIDE — leafSizeAt above grades purely by distance to the route, which is
+// blind to vertical relief: on the cresta-ebro ridge road, drops of several hundred
+// metres start a few metres off the asphalt, so a cell at 90-400 m out (already graded to
+// 31-124 m by distance alone) can span well over 100 m of vertical cliff face with one
+// flat quad — a visible staircase. isLeafCell below adds a second, independent test: keep
+// subdividing while the cell's own corner-to-corner height range exceeds RELIEF_THRESHOLD,
+// on top of whatever the distance grade already decided.
+//
+// Gated on both size and distance so the far field never pays for it: RELIEF_GATE_SIZE
+// (32 m) and RELIEF_GATE_DIST (350 m) bound the test to the near-to-mid ring around the
+// route where leafSizeAt's distance grade first produces cells coarse enough to span
+// real relief — cells larger than 32 m only occur further out (>~90 m, per leafSizeAt),
+// where the far-field cost of 5 extra field.heightAt samples per candidate node would
+// explode across the whole horizon for comparatively little visible gain (measured:
+// widening the size gate to 64/128 m nearly tripled cresta-ebro's triangle count and blew
+// through its scene-budget ceiling for a barely-perceptible extra smoothing at range).
+// Outside that ring/size window, isLeafCell returns the plain distance verdict with no
+// extra field samples.
+//
+// RELIEF_FLOOR stops relief-driven subdivision at 8 m, twice MIN_LEAF: a cliff face cannot
+// subdivide without bound just because it stays steep, and 8 m is where the extra cost
+// (5 field.heightAt samples per candidate node) starts to matter.
+const RELIEF_GATE_SIZE = 32;
+const RELIEF_GATE_DIST = 350;
+const RELIEF_FLOOR = 8;
+const RELIEF_THRESHOLD = 48;
+
+/**
+ * Vertical relief of a cell: the spread between its highest and lowest sampled point.
+ * Sampled at the four corners and the centre — five `field.heightAt` calls, pure in
+ * (x, z, size) exactly like `field.heightAt` itself, so `isLeafCell` stays a pure function
+ * of a cell's identity and `resolvedLeafSizeAt`'s neighbour resolution stays exact (see the
+ * module doc's skirt-predicate section: anything that isn't a deterministic function of the
+ * cell would desync the two callers and open cracks).
+ */
+function reliefOf(field: HeightField, x: number, z: number, size: number): number {
+  const h0 = field.heightAt(x, z);
+  const h1 = field.heightAt(x + size, z);
+  const h2 = field.heightAt(x, z + size);
+  const h3 = field.heightAt(x + size, z + size);
+  const h4 = field.heightAt(x + size / 2, z + size / 2);
+  const lo = Math.min(h0, h1, h2, h3, h4);
+  const hi = Math.max(h0, h1, h2, h3, h4);
+  return hi - lo;
+}
+
 export function buildTerrainMesh(field: HeightField): THREE.Mesh {
   const { minX, maxX, minZ, maxZ } = field.bounds;
 
@@ -124,7 +170,15 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
     // Conservative: use the closest point of the cell to the route, so a cell that only
     // clips the corridor still subdivides.
     const d = Math.max(0, field.distToRoute(cx, cz) - size * 0.7071);
-    const result = size <= leafSizeAt(d);
+    let result = size <= leafSizeAt(d);
+
+    // Relief override (see module doc / const block above): only when the distance grade
+    // has already agreed to stop here, only in the size/distance window where the far
+    // field's cost would otherwise explode, and never below RELIEF_FLOOR.
+    if (result && size > RELIEF_FLOOR && size <= RELIEF_GATE_SIZE && d <= RELIEF_GATE_DIST) {
+      if (reliefOf(field, x, z, size) > RELIEF_THRESHOLD) result = false;
+    }
+
     leafDecisionCache.set(key, result);
     return result;
   };
