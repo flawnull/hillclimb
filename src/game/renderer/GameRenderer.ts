@@ -14,7 +14,12 @@ import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
 import { EffectsManager } from "./EffectsManager";
 
-const CAMERA_FAR = 900;
+// The terrain height field extends FIELD_PADDING (2500 m, see heightField.ts) beyond the
+// route's bounding box, generating ridge relief all the way out there. A 900 m far plane
+// clipped every one of those distant ridges before they ever reached the camera frustum —
+// this was the "mountains not being there" symptom reported by the user, not a terrain
+// generation bug. 6000 m comfortably covers the padded field with headroom to spare.
+const CAMERA_FAR = 6000;
 
 export class GameRenderer {
   private canvas: HTMLCanvasElement;
@@ -77,19 +82,49 @@ export class GameRenderer {
     this.renderer.toneMappingExposure = 1.05;
 
     // 2. Initialize Scene & Camera
+    //
+    // Background and fog share one colour ("#7891a8", a deeper, warmer haze blue than the
+    // old very-light slate) so the horizon closes seamlessly instead of showing a hard edge
+    // where the terrain mesh ends and the flat background colour begins.
+    //
+    // FogExp2 attenuates as F(d) = exp(-(d * density)^2), where F is the fraction of the
+    // fog colour mixed in (1 = fully fogged, 0 = clear). At CAMERA_FAR = 6000 the old
+    // density of 0.0021 (tuned for a 900 m world) gives F(900) = exp(-(900*0.0021)^2) =
+    // exp(-3.57) ≈ 0.028 — already almost opaque white by the old far plane, and completely
+    // opaque long before 6000 m, so the distant ridges would be fogged out solid rather than
+    // fading in as haze. We want the far ridges (4000-5000 m out) to sit at roughly
+    // F ≈ 0.05-0.10: visible through haze, not popping out of clear air and not vanishing
+    // into a wall of fog. Solving exp(-(d*density)^2) = 0.075 at the midpoint d = 4500:
+    //   (4500 * density)^2 = -ln(0.075) = 2.590
+    //   4500 * density = sqrt(2.590) = 1.609
+    //   density = 1.609 / 4500 ≈ 0.000358
+    // Rounding to density = 0.00035 and checking the endpoints of the 4000-5000 m band:
+    //   F(4000) = exp(-(4000*0.00035)^2) = exp(-1.96)  ≈ 0.141
+    //   F(4500) = exp(-(4500*0.00035)^2) = exp(-2.481) ≈ 0.084
+    //   F(5000) = exp(-(5000*0.00035)^2) = exp(-3.0625) ≈ 0.047
+    // which brackets the 0.05-0.10 target around the 4000-5000 m band the far ridges live in.
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color("#cbd5e1");
-    this.scene.fog = new THREE.FogExp2("#cbd5e1", 0.0021);
+    this.scene.background = new THREE.Color("#7891a8");
+    this.scene.fog = new THREE.FogExp2("#7891a8", 0.00035);
 
     const aspect = canvas.clientWidth / canvas.clientHeight || 16 / 9;
-    this.camera = new THREE.PerspectiveCamera(60, aspect, 0.1, CAMERA_FAR);
+    // Near plane raised from 0.1 to 0.5: against a 6000 m far plane, 0.1 wastes almost all
+    // of the depth buffer's precision on a range the chase camera never uses — it never gets
+    // closer than roughly half a metre to the car body it is chasing.
+    this.camera = new THREE.PerspectiveCamera(60, aspect, 0.5, CAMERA_FAR);
     this.camera.position.set(0, 4, -8);
 
     if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-      const w = window as unknown as { __vbScene?: THREE.Scene; __vbCamera?: THREE.Camera; __vbRenderer?: GameRenderer };
+      const w = window as unknown as {
+        __vbScene?: THREE.Scene;
+        __vbCamera?: THREE.Camera;
+        __vbRenderer?: GameRenderer;
+        __vbSpline?: TrackSpline;
+      };
       w.__vbScene = this.scene;
       w.__vbCamera = this.camera;
       w.__vbRenderer = this;
+      w.__vbSpline = this.activeSpline;
     }
 
     // 3. Lighting
@@ -136,6 +171,11 @@ export class GameRenderer {
   public rebuildTrack(spline: TrackSpline): void {
     this.activeSpline = spline;
     this.cameraController.reset();
+
+    if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+      const w = window as unknown as { __vbSpline?: TrackSpline };
+      w.__vbSpline = spline;
+    }
 
     // Clear existing track meshes
     while (this.trackGroup.children.length > 0) {
@@ -302,6 +342,11 @@ export class GameRenderer {
     };
 
     this.animationFrameId = requestAnimationFrame(renderLoop);
+  }
+
+  /** Render a single frame without advancing physics. Used by visual diagnostics. */
+  public renderOnce(): void {
+    this.renderer.render(this.scene, this.camera);
   }
 
   public stop(): void {
