@@ -84,6 +84,31 @@ export async function validateRunSubmission(payload: SubmitRunPayload): Promise<
     return { valid: false, reason: "Replay trace is required for verification" };
   }
 
+  // 5b. Replay length ceiling. Without one, a submission can hand the Edge function an
+  // arbitrarily long array and make it run the full physics + Frenet projection loop over
+  // every frame of it. Bronze is the slowest time the stage recognises, so 1.5x bronze is
+  // generous for any real run while still bounding the work an attacker can demand.
+  const maxFrames = Math.ceil(stage.bronzeTime * 1.5 / PHYSICS_DT);
+  if (replays.length > maxFrames) {
+    return { valid: false, reason: `Replay trace is implausibly long (${replays.length} frames, max ${maxFrames})` };
+  }
+
+  // 5c. Frame field validation. These values are divided and fed straight into the
+  // simulation, so a non-finite or out-of-range entry would poison the vehicle state with
+  // NaN and make every downstream comparison meaningless.
+  for (let i = 0; i < replays.length; i++) {
+    const f = replays[i];
+    if (
+      !f ||
+      !Number.isFinite(f.steer) || f.steer < -127 || f.steer > 127 ||
+      !Number.isFinite(f.throttle) || f.throttle < 0 || f.throttle > 255 ||
+      !Number.isFinite(f.brake) || f.brake < 0 || f.brake > 255 ||
+      !Number.isFinite(f.handbrake) || (f.handbrake !== 0 && f.handbrake !== 1)
+    ) {
+      return { valid: false, reason: `Replay frame ${i} contains out-of-range or non-finite input` };
+    }
+  }
+
   // 6. Replay Integrity Hash Check (§12.5.4)
   if (!inputHash || typeof inputHash !== "string") {
     return { valid: false, reason: "Missing replay integrity hash" };
@@ -205,6 +230,23 @@ export async function validateRunSubmission(payload: SubmitRunPayload): Promise<
       valid: false,
       reason: `Re-simulation mismatch (submitted: raw ${timeMs}ms / penalty ${penaltyMs || 0}ms, simulated: raw ${simRawTimeMs}ms / penalty ${simPenaltyMs}ms, raw diff: ${rawDiffMs}ms, penalty diff: ${penaltyDiffMs}ms)`,
     };
+  }
+
+  // The replay must actually have completed the stage.
+  //
+  // Without this check the anti-cheat is trivially bypassable. `Timer.stepCount` advances on
+  // every frame while the run is `running`, and the simulated time compared just above is
+  // only `stepCount * PHYSICS_DT`. So a replay of all-zero inputs — a car that never moves
+  // and crosses no checkpoint — reproduces any claimed time exactly, and clears every other
+  // gate here: the token is genuine, the integrity hash is computed over the attacker's own
+  // frames, and the wall-clock check only requires that enough real time has passed.
+  // Reaching the final checkpoint is the one thing a forged replay cannot fake.
+  //
+  // Deliberately checked LAST, after the re-simulation comparison. A run that reproduces its
+  // claimed time to the millisecond but never finished is a different failure from one whose
+  // physics diverged, and keeping this last means the reason reported distinguishes them.
+  if (timer.state !== "finished") {
+    return { valid: false, reason: "Replay did not complete the stage (final checkpoint never reached)" };
   }
 
   return { valid: true };

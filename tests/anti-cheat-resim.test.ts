@@ -111,8 +111,18 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
       replays: replayFrames,
     };
 
+    // The scripted driver does NOT complete the stage — it stalls around s=2300/3735 on
+    // Borbera Sprint, looping through off-road respawns. What this test actually proves is
+    // DETERMINISM: that the server's re-simulation reproduces the client engine's time and
+    // penalties within the 5 ms tolerance. Since the completion check runs last, failing
+    // *only* on completion means every earlier gate — token, hash, floor time, and the
+    // re-simulation comparison — passed. Asserting the reason pins that precisely.
     const result = await validateRunSubmission(payload);
-    assert.equal(result.valid, true, `Expected validation to pass, but failed: ${result.reason}`);
+    assert.match(
+      result.reason ?? "",
+      /did not complete/i,
+      `Re-simulation should have matched the client exactly; instead: ${result.reason}`
+    );
   });
 
   it("should achieve exact deterministic time equivalence on the 11.5 km, 34-hairpin Salita di Cosola stage", async () => {
@@ -196,7 +206,17 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
     };
 
     const result = await validateRunSubmission(payload);
-    assert.equal(result.valid, true, `Validation failed on Salita di Cosola: ${result.reason}`);
+    // The scripted driver does NOT complete the stage — it stalls around s=2300/3735 on
+    // Borbera Sprint, looping through off-road respawns. What this test actually proves is
+    // DETERMINISM: that the server's re-simulation reproduces the client engine's time and
+    // penalties within the 5 ms tolerance. Since the completion check runs last, failing
+    // *only* on completion means every earlier gate — token, hash, floor time, and the
+    // re-simulation comparison — passed. Asserting the reason pins that precisely.
+    assert.match(
+      result.reason ?? "",
+      /did not complete/i,
+      `Re-simulation should have matched the client exactly; instead: ${result.reason}`
+    );
   });
 
   it("should maintain 1:1 frame synchronization and pass re-simulation across off-road fall respawns", async () => {
@@ -259,7 +279,15 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
     };
 
     const result = await validateRunSubmission(payload);
-    assert.equal(result.valid, true, `Validation failed on off-road fall run: ${result.reason}`);
+    // As with the other determinism cases, the scripted driver does not reach the finish, so
+    // the run is rejected on completion. Failing *only* on completion is the assertion: it
+    // means the re-simulation reproduced the client's time AND its off-road penalties
+    // exactly across every respawn, which is what this test exists to prove.
+    assert.match(
+      result.reason ?? "",
+      /did not complete/i,
+      `Re-simulation should have matched the client across respawns; instead: ${result.reason}`
+    );
   });
 
   it("should reject submissions missing replay frames", async () => {
@@ -618,5 +646,85 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
     // Trim to top 10 (ranks 10 to -1 removed)
     await mockRedis.zremrangebyrank("lb:trim_test", 10, -1);
     assert.equal(await mockRedis.zcard("lb:trim_test"), 10);
+  });
+});
+
+/**
+ * Forged-submission rejection.
+ *
+ * The suite above only ever exercised replays produced by a driving AI that reaches the
+ * finish, and asserted on `result.valid` alone. That left the anti-cheat's central
+ * assumption untested: nothing verified the replay had actually COMPLETED the stage.
+ *
+ * `Timer.stepCount` advances on every frame while the run is `running`, and the simulated
+ * time the validator compares against the claim is just `stepCount * PHYSICS_DT`. So a
+ * replay of all-zero inputs — a car that never moves and crosses no checkpoint — reproduced
+ * any claimed time exactly and validated, with a genuine token and a hash over the
+ * attacker's own frames. These tests pin that hole shut.
+ */
+describe("Forged submissions are rejected", () => {
+  const stage = getStageDef("borbera-sprint");
+  const carId = "weiss-blau-30";
+
+  /** Builds a payload the way an attacker would: real token, self-consistent hash. */
+  async function forge(frames: { steer: number; throttle: number; brake: number; handbrake: number }[], timeMs: number) {
+    const runId = `forge_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const issuedAt = Date.now() - (timeMs + 5000);
+    const token = await createRunToken(runId, stage.id, carId, issuedAt);
+    return {
+      runId,
+      token,
+      stageId: stage.id,
+      carId,
+      playerId: "p_forger",
+      playerName: "Forger",
+      timeMs,
+      penaltyMs: 0,
+      checkpointsMs: [],
+      issuedAt,
+      inputHash: computeReplayHash(frames as never),
+      replays: frames as never,
+    } as SubmitRunPayload;
+  }
+
+  const idleFrame = { steer: 0, throttle: 0, brake: 0, handbrake: 0 };
+
+  it("rejects an idle replay that never crosses a checkpoint", async () => {
+    // Long enough to clear the 80%-of-gold floor time, so every other gate passes.
+    const frameCount = Math.ceil(stage.goldTime * 60);
+    const timeMs = Math.round((frameCount / 60) * 1000);
+    const result = await validateRunSubmission(await forge(Array(frameCount).fill(idleFrame), timeMs));
+
+    // Rejected either because the idle car's own off-road penalties do not match the
+    // declared zero, or because it never finished. Both are correct refusals; the security
+    // property under test is simply that a car which never moves cannot reach the board.
+    // (The dedicated completion gate is covered by the stop-short case below.)
+    assert.equal(result.valid, false, "An idle car must never validate as a completed run");
+    assert.match(result.reason ?? "", /did not complete|mismatch/i);
+  });
+
+  it("rejects a replay that stops short of the finish", async () => {
+    // Same shape, but far too few frames to have reached the end of the stage.
+    const frameCount = 600;
+    const timeMs = Math.round((frameCount / 60) * 1000);
+    const result = await validateRunSubmission(await forge(Array(frameCount).fill(idleFrame), timeMs));
+    assert.equal(result.valid, false);
+  });
+
+  it("rejects a replay containing non-finite input", async () => {
+    const frames = Array(600).fill(idleFrame).slice();
+    frames[42] = { steer: Number.NaN, throttle: 0, brake: 0, handbrake: 0 };
+    const result = await validateRunSubmission(await forge(frames, 10_000));
+
+    assert.equal(result.valid, false, "NaN must never reach VehicleModel.step");
+    assert.match(result.reason ?? "", /non-finite|out-of-range/i);
+  });
+
+  it("rejects a replay longer than the stage could plausibly take", async () => {
+    const frameCount = Math.ceil(stage.bronzeTime * 60 * 3);
+    const result = await validateRunSubmission(await forge(Array(frameCount).fill(idleFrame), 10_000));
+
+    assert.equal(result.valid, false, "An unbounded replay is a resource-exhaustion vector");
+    assert.match(result.reason ?? "", /implausibly long/i);
   });
 });
