@@ -15,6 +15,7 @@ import { LeaderboardModal } from "@/ui/LeaderboardModal";
 import { TouchControls } from "@/ui/TouchControls";
 import { RotateHint } from "@/ui/RotateHint";
 import { useWakeLock } from "@/ui/hooks/useWakeLock";
+import { useStoreHydration } from "@/ui/hooks/useStoreHydration";
 import { useEngineLifecycle } from "@/ui/hooks/useEngineLifecycle";
 import { useRunOutcome } from "@/ui/hooks/useRunOutcome";
 import { useKeyboardShortcuts } from "@/ui/hooks/useKeyboardShortcuts";
@@ -40,6 +41,10 @@ const GameCanvas = dynamic(
 );
 
 export default function HomePage() {
+  // Load persisted progress (unlocks, personal bests, settings) after mount. The store skips
+  // automatic hydration so the first client render matches the server HTML; see the hook.
+  useStoreHydration();
+
   const selectedCarId = useGameStore((s) => s.selectedCarId);
   const selectedStageId = useGameStore((s) => s.selectedStageId);
   const selectedColorIndex = useGameStore((s) => s.selectedColorIndex);

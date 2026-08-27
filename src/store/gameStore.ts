@@ -5,6 +5,7 @@
  */
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 import { DEFAULT_CAR_ID } from "@/game/vehicle/cars";
 
 export type QualityTier = 'high' | 'medium' | 'low';
@@ -75,7 +76,23 @@ const DEFAULT_SETTINGS: GameSettings = {
   haptics: false,
 };
 
-export const useGameStore = create<GameStoreState>((set, get) => ({
+/**
+ * Progress is persisted to localStorage.
+ *
+ * Without this, unlocking the Alpe A-110 by beating a gold time lasted until the next page
+ * load, personal bests vanished on refresh (taking the result modal's PB delta with them),
+ * and quality/control settings reset on every visit.
+ *
+ * `skipHydration` is deliberate. The server renders with the defaults below; reading
+ * localStorage during render would make the first client render disagree with that HTML and
+ * produce a hydration mismatch. Instead the app rehydrates explicitly after mount — see
+ * `useStoreHydration`. Only durable progress and preferences are persisted; transient UI
+ * state (paused, playing, panel visibility) is deliberately excluded so a reload always
+ * starts from a clean interface.
+ */
+export const useGameStore = create<GameStoreState>()(
+  persist(
+    (set, get) => ({
   selectedCarId: DEFAULT_CAR_ID,
   selectedStageId: 'borbera-sprint',
   selectedColorIndex: 0,
@@ -118,4 +135,20 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
     }
     return false;
   },
-}));
+}),
+    {
+      name: "val-borbera-hillclimb",
+      version: 1,
+      storage: createJSONStorage(() => localStorage),
+      skipHydration: true,
+      partialize: (s) => ({
+        selectedCarId: s.selectedCarId,
+        selectedStageId: s.selectedStageId,
+        selectedColorIndex: s.selectedColorIndex,
+        unlockedCarIds: s.unlockedCarIds,
+        settings: s.settings,
+        personalBests: s.personalBests,
+      }),
+    }
+  )
+);

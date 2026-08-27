@@ -157,6 +157,33 @@ async function main(): Promise<void> {
       await page.waitForTimeout(300);
     }
 
+    // --- Persistence: progress must survive a reload ----------------------------------
+    // Regression guard. Unlocks, personal bests and settings were plain in-memory state, so
+    // beating a gold time unlocked a car until the next page load and then silently lost it.
+    // Drive the store through its own public action rather than writing storage directly, so
+    // this exercises the same path the game uses when a gold time unlocks a car.
+    await page.evaluate(() => {
+      const w = window as never as { __vbStore?: { getState: () => { unlockCar: (id: string) => void } } };
+      w.__vbStore?.getState().unlockCar("alpe-a110");
+    });
+    await page.waitForTimeout(400);
+
+    const unlockedBefore = await page.evaluate(
+      () =>
+        (window as never as { __vbStore?: { getState: () => { unlockedCarIds: string[] } } }).__vbStore?.getState()
+          .unlockedCarIds ?? []
+    );
+    check("car can be unlocked", unlockedBefore.includes("alpe-a110"), JSON.stringify(unlockedBefore));
+
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(1500);
+    const unlockedAfter = await page.evaluate(
+      () =>
+        (window as never as { __vbStore?: { getState: () => { unlockedCarIds: string[] } } }).__vbStore?.getState()
+          .unlockedCarIds ?? []
+    );
+    check("unlocked car survives a reload", unlockedAfter.includes("alpe-a110"), JSON.stringify(unlockedAfter));
+
     check("no console errors during the session", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | "));
   } finally {
     await browser?.close();
