@@ -25,8 +25,24 @@
  * Bumping re-keys the leaderboards (lb:{sim}:{stage}:{class}) and invalidates
  * outstanding run tokens, so runs from different physics can never mix.
  * Editing any file above WITHOUT bumping silently corrupts the leaderboard.
+ *
+ * Also bump when the REPLAY PIPELINE changes in a way that alters what a recorded run
+ * contains, since re-simulation compares against exactly those frames.
+ *
+ * 5 -> 6: the replay recorder dropped the frame that crosses the finish line (the timer had
+ *   already flipped to 'finished' before the recording check ran), so every replay was one
+ *   frame shorter than the time it claimed and the server re-simulation came out 16.67 ms
+ *   low — outside the 5 ms tolerance. No legitimately completed run could validate. The same
+ *   release added the missing completion check to the validator, which until then accepted a
+ *   replay of all-zero inputs as a finished run. Any entry standing on the old leaderboards
+ *   was therefore necessarily forged, so this bump also serves to retire them.
+ *   The same release moved trackBuilder.ts off native Math.sin/cos/PI onto the deterministic
+ *   kernel. That geometry feeds TrackSpline's Frenet projection on both the client and the
+ *   Edge re-simulation, and native trig is not bit-identical across V8, JavaScriptCore and
+ *   Hermes, so a run recorded on one engine could fail to reproduce on another. Control point
+ *   positions shift by a hair as a result, which is a stage-geometry change in its own right.
  */
-export const SIM_VERSION = 5;
+export const SIM_VERSION = 6;
 
 /*
  * Version history — append a line whenever this is bumped.

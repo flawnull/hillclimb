@@ -246,10 +246,21 @@ describe("Deterministic Math — source purity guard", () => {
 
   it("the simulation path calls no engine-dependent Math functions", () => {
     const here = dirname(fileURLToPath(import.meta.url));
+    // The guard previously covered only the three files below the comment line. It missed
+    // trackBuilder.ts, which lays out every road control point with trig — and that geometry
+    // feeds TrackSpline's Frenet projection on both the client and the Edge re-simulation, so
+    // a single ULP of divergence there compounds across a 40,000-step run exactly the way the
+    // vehicle math would. The stage files are included for the same reason: SIM_VERSION's own
+    // bump list already names stages/* as simulation-affecting.
     const files = [
       "../src/game/vehicle/VehicleModel.ts",
       "../src/game/track/TrackSpline.ts",
       "../src/game/timing/Timer.ts",
+      "../src/game/track/authoring/trackBuilder.ts",
+      "../src/game/track/stages/borberaSprint.ts",
+      "../src/game/track/stages/salitaCosola.ts",
+      "../src/game/track/stages/crestaEbro.ts",
+      "../src/game/track/stages/index.ts",
     ];
     const forbidden = ["sin", "cos", "tan", "atan", "atan2", "pow", "exp", "log", "hypot", "cbrt", "fround", "random"];
     for (const rel of files) {
@@ -259,6 +270,9 @@ describe("Deterministic Math — source purity guard", () => {
         const re = new RegExp(`Math\\.${name}\\s*\\(`);
         assert.ok(!re.test(code), `${rel} must not call Math.${name}() — use the det* equivalent`);
       }
+      // Math.PI is a property, not a call, so the loop above cannot see it. It seeds the
+      // arguments to the trig above, so it belongs to the same kernel.
+      assert.ok(!/Math\.PI/.test(code), `${rel} must not use Math.PI — use DET_PI`);
     }
   });
 });

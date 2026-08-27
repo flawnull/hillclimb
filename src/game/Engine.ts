@@ -379,8 +379,16 @@ export class Engine {
       this.recorder.start();
     }
 
-    // Record replay step while active running state
-    if (this.timer.state === 'running') {
+    // Record every step the timer counted, including the one that crosses the finish line.
+    //
+    // `timer.step()` above has already flipped the state to 'finished' on that last frame, so
+    // testing `state === 'running'` alone dropped it — leaving the replay exactly one frame
+    // shorter than the time it claims. The server re-simulation then reproduced a time
+    // 16.67 ms lower than the client's and rejected it against the 5 ms tolerance, which
+    // meant no legitimately completed run could ever validate.
+    const countedThisStep =
+      this.timer.state === 'running' || (timerResult.state === 'finished' && !this.hasTriggeredFinish);
+    if (countedThisStep) {
       this.recorder.recordStep({ steer, throttle, brake, handbrake, reverse });
     }
 

@@ -728,3 +728,84 @@ describe("Forged submissions are rejected", () => {
     assert.match(result.reason ?? "", /implausibly long/i);
   });
 });
+
+/**
+ * The happy path, end to end.
+ *
+ * Every other positive test in this file drives a fixed number of steps and submits whatever
+ * the timer reads — none of them ever reaches the finish line, so until now nothing asserted
+ * that a genuinely completed run validates. That gap is what let the missing completion check
+ * survive: the forged-submission tests above prove bad runs are rejected, and this proves
+ * good ones still get through.
+ *
+ * The driver here is deliberately more conservative than the one used above (lower speed cap,
+ * stronger lateral correction, no handbrake). The aggressive one overcooks a corner at
+ * s~2420 and loops through off-road respawns forever without progressing.
+ */
+describe("A completed run validates end to end", () => {
+  it("accepts a run that actually reaches the finish line", async () => {
+    const stage = getStageDef("borbera-sprint");
+    const spline = new TrackSpline(stage);
+    const engine = new Engine("weiss-blau-30");
+    engine.setSpline(spline);
+    engine.startRun();
+
+    const SPEED_CAP_KMH = 85;
+    let cachedS = 0;
+    let finished = false;
+
+    for (let step = 0; step < 30000; step++) {
+      const s = engine.vehicle.state;
+      const proj = spline.projectFrenet(s.pos.x, s.pos.z, cachedS);
+      cachedS = proj.s;
+
+      const lookahead = Math.max(8, Math.min(22, s.speedMs * 0.7));
+      const target = spline.getSampleAtS(Math.min(spline.totalLength - 0.5, proj.s + lookahead));
+      const angleDiff = detNormalizeAngle(detAtan2(target.x - s.pos.x, target.z - s.pos.z) - s.heading);
+      const steer = Math.max(-1, Math.min(1, angleDiff * 3.8 - proj.t * 0.35));
+
+      const curvature = Math.abs(angleDiff) / lookahead;
+      let targetKmh = SPEED_CAP_KMH;
+      if (curvature > 0.04) targetKmh = 32;
+      else if (curvature > 0.02) targetKmh = 55;
+      else if (curvature > 0.01) targetKmh = 80;
+
+      const throttle = s.speedKmh < targetKmh ? 1.0 : 0;
+      const brake = s.speedKmh < targetKmh ? 0 : Math.min(1, (s.speedKmh - targetKmh) * 0.12);
+
+      engine.input.setTouchAxes({ steer, throttle, brake, handbrake: false });
+      engine.update(PHYSICS_DT, true);
+
+      if (engine.timer.state === "finished") {
+        finished = true;
+        break;
+      }
+    }
+
+    assert.equal(finished, true, "The conservative driver should complete Borbera Sprint");
+
+    const replayFrames = engine.recorder.stop();
+    const clientTimeMs = Math.round(engine.timer.getElapsedSeconds() * 1000);
+    const penaltyMs = Math.round(engine.timer.totalPenaltySeconds * 1000);
+    const runId = `test_complete_${Date.now()}`;
+    const issuedAt = Date.now() - (clientTimeMs + 5000);
+
+    const payload: SubmitRunPayload = {
+      runId,
+      token: await createRunToken(runId, stage.id, "weiss-blau-30", issuedAt),
+      stageId: stage.id,
+      carId: "weiss-blau-30",
+      playerId: "p_finisher",
+      playerName: "Finisher",
+      timeMs: clientTimeMs,
+      penaltyMs,
+      checkpointsMs: engine.timer.getSplitsMs(),
+      issuedAt,
+      inputHash: computeReplayHash(replayFrames),
+      replays: replayFrames,
+    };
+
+    const result = await validateRunSubmission(payload);
+    assert.equal(result.valid, true, `A completed run must validate, but was rejected: ${result.reason}`);
+  });
+});

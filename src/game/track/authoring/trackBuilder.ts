@@ -6,6 +6,7 @@
 
 import { ControlPoint, StageDef, ExposureSide } from "../TrackSpline";
 import { SurfaceType } from "../../vehicle/vehicleTuning";
+import { detSin, detCos, DET_PI } from "../../vehicle/deterministicMath";
 
 export interface SegmentStraightOptions {
   grade?: number;             // vertical slope (e.g. 0.08 = 8% climb)
@@ -82,8 +83,8 @@ export class TrackBuilder {
     const count = Math.max(1, Math.round(length / step));
     const actualStep = length / count;
 
-    const dx = Math.sin(this.heading) * actualStep;
-    const dz = Math.cos(this.heading) * actualStep;
+    const dx = detSin(this.heading) * actualStep;
+    const dz = detCos(this.heading) * actualStep;
     const dy = actualStep * grade;
 
     for (let i = 0; i < count; i++) {
@@ -109,7 +110,7 @@ export class TrackBuilder {
 
   public sweeper(opt: SegmentSweeperOptions): this {
     const radius = opt.radius;
-    const arcRad = (opt.arcDeg * Math.PI) / 180;
+    const arcRad = (opt.arcDeg * DET_PI) / 180;
     const dirSign = opt.dir === 'right' ? 1 : -1;
     const grade = opt.grade ?? 0;
 
@@ -125,8 +126,8 @@ export class TrackBuilder {
 
     for (let i = 0; i < count; i++) {
       this.heading += dTheta;
-      this.x += Math.sin(this.heading) * dS;
-      this.z += Math.cos(this.heading) * dS;
+      this.x += detSin(this.heading) * dS;
+      this.z += detCos(this.heading) * dS;
       this.y += dy;
       this.currentS += dS;
 
@@ -149,7 +150,7 @@ export class TrackBuilder {
     this.hairpinsCount++;
     const radius = opt.radius ?? 11;
     const arcDeg = opt.arcDeg ?? 165;
-    const arcRad = (arcDeg * Math.PI) / 180;
+    const arcRad = (arcDeg * DET_PI) / 180;
     const dirSign = opt.dir === 'right' ? 1 : -1;
     const entryGrade = opt.entryGrade ?? 0.07;
     const exitGrade = opt.exitGrade ?? 0.10;
@@ -168,13 +169,13 @@ export class TrackBuilder {
       const dy = dS * currentGrade;
 
       this.heading += dTheta;
-      this.x += Math.sin(this.heading) * dS;
-      this.z += Math.cos(this.heading) * dS;
+      this.x += detSin(this.heading) * dS;
+      this.z += detCos(this.heading) * dS;
       this.y += dy;
       this.currentS += dS;
 
       // Peak widening at apex (u = 0.5)
-      const apexFactor = Math.sin(u * Math.PI);
+      const apexFactor = detSin(u * DET_PI);
       const halfWidth = (opt.halfWidth ?? 3.6) + apexFactor * 1.8; // widens to 5.4m
       const isApex = i === Math.floor(count / 2);
 
