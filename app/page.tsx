@@ -70,7 +70,6 @@ export default function HomePage() {
     showTuningPanel,
     toggleTuningPanel,
     settings,
-    personalBests,
     savePersonalBest,
     unlockCar,
   } = useGameStore();
@@ -108,9 +107,13 @@ export default function HomePage() {
     setStageDef(sDef);
     const newSpline = new TrackSpline(sDef);
     const pbKey = `${selectedStageId}:${activeCarDef.className}`;
-    const currentPB = personalBests[pbKey];
+    // Read the PB untracked. Depending on the `personalBests` map would re-run this effect
+    // every time a run is saved — and `engine.setSpline` calls `resetToStart()`, so finishing
+    // a race would immediately reset the car and timer again and rebuild the spline (an
+    // expensive procedural walk) for a stage that has not changed.
+    const currentPB = useGameStore.getState().personalBests[pbKey];
     engine.setSpline(newSpline, currentPB);
-  }, [selectedStageId, engine, activeCarDef.className, personalBests]);
+  }, [selectedStageId, engine, activeCarDef.className]);
 
   // Synchronize active car with engine
   useEffect(() => {
@@ -196,6 +199,20 @@ export default function HomePage() {
   // Keyboard shortcuts (R for reset, T for tuning panel, Space for start, L for leaderboard)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Never fire shortcuts while the player is typing. The result modal has a text input
+      // for the leaderboard name, so without this guard a name containing "r" resets the run
+      // and closes the modal mid-entry, "t" opens the tuning panel, and "l" opens the
+      // leaderboard.
+      const target = e.target as HTMLElement | null;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
       if (e.code === "KeyR") {
         engine.resetToStart();
         runTokenRef.current = null;

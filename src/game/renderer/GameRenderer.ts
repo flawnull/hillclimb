@@ -21,6 +21,33 @@ import { EffectsManager } from "./EffectsManager";
 // generation bug. 6000 m comfortably covers the padded field with headroom to spare.
 const CAMERA_FAR = 6000;
 
+/**
+ * Disposes every material under `root`, along with the textures those materials own.
+ *
+ * Only for subtrees whose materials are NOT shared — `batchStatics.ts` hands out materials
+ * from a module-level cache keyed by content signature, and disposing one of those would
+ * break every later stage that reuses the same signature. Deduplicates because chunked
+ * meshes share one material instance across all their chunks.
+ */
+function disposeOwnedMaterials(root: THREE.Object3D): void {
+  const seen = new Set<THREE.Material>();
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (!material || seen.has(material)) continue;
+      seen.add(material);
+      const standard = material as THREE.MeshStandardMaterial;
+      standard.map?.dispose();
+      standard.bumpMap?.dispose();
+      standard.normalMap?.dispose();
+      standard.roughnessMap?.dispose();
+      material.dispose();
+    }
+  });
+}
+
 export class GameRenderer {
   private canvas: HTMLCanvasElement;
   private renderer: THREE.WebGLRenderer;
@@ -196,6 +223,11 @@ export class GameRenderer {
     // every later stage that reuses the same signature, not just this one. Geometries carry
     // no such sharing (each RoadMesh build produces its own fresh geometry, merged or not),
     // so disposing only geometries is safe and plugs the leak without touching the cache.
+    // The road ribbon itself is the exception to that rule: `RoadMesh.mesh` is built by
+    // `chunkMeshBySpace(buildRoadGeometry())`, which never routes through `batchStaticGroup`,
+    // so its MeshStandardMaterial and the 1024x1024 CanvasTexture it wraps are freshly
+    // constructed per RoadMesh and owned by nobody else. Those must be disposed too, or every
+    // stage change leaks a full asphalt texture.
     if (this.roadMesh) {
       for (const root of [this.roadMesh.mesh, this.roadMesh.guardrailGroup, this.roadMesh.landmarkGroup]) {
         root.traverse((node) => {
@@ -203,6 +235,7 @@ export class GameRenderer {
           if (m.isMesh) m.geometry?.dispose();
         });
       }
+      disposeOwnedMaterials(this.roadMesh.mesh);
     }
     this.roadMesh = new RoadMesh(spline);
     this.trackGroup.add(this.roadMesh.mesh);
@@ -242,6 +275,19 @@ export class GameRenderer {
   }
 
   private rebuildCarMesh(): void {
+    // Dispose the outgoing car before replacing it. `CarMeshBuilder.buildCarModel` constructs
+    // roughly a dozen geometries and fifteen materials per call — body, glass, trim, chrome,
+    // lights, tyres, rims, hubs, calipers, discs — none of them cached or shared. Removing
+    // the group from the scene only unlinks it; without this every car or colourway change
+    // in the garage leaked the whole previous model's GPU memory.
+    if (this.carMeshResult) {
+      this.carMeshResult.carGroup.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (mesh.isMesh) mesh.geometry?.dispose();
+      });
+      disposeOwnedMaterials(this.carMeshResult.carGroup);
+    }
+
     while (this.carGroup.children.length > 0) {
       const child = this.carGroup.children[0];
       this.carGroup.remove(child);
