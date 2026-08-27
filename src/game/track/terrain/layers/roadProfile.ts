@@ -4,10 +4,18 @@
  * The shape of the ground as you walk sideways off one road sample: gravel verge, then
  * either a sandstone cut rising into the hillside, or a drop toward the valley floor.
  *
- * This is the tuned profile from the previous `terrainHeightAt`, extracted unchanged so
- * the stages keep their look. What is NOT here is any notion of how far the profile
- * extends or how two road tiers reconcile — that belongs to the carve layer, which
- * soft-mins across every nearby tier.
+ * This is the tuned profile from the previous `terrainHeightAt`: the cut/drop/rise
+ * constants (DROP_FALLOFF, CUT_HEIGHT, HILLSIDE_RISE, etc.) all carried over unchanged, so
+ * the stages keep their look. What DID change is how the ribbon and verge heights are
+ * expressed: the old code wrote `s.y - 0.20` on the ribbon but `s.y - 0.12 - 0.08*(d /
+ * VERGE_WIDTH)` on the verge — two independently-tuned constants that left a real ~0.08 m
+ * step in the ground at the ribbon edge. Both are now written in terms of a single
+ * `ROAD_CLEARANCE = 0.25`, which moves the ribbon down 5 cm from where it sat before AND
+ * removes that pre-existing discontinuity as a side effect, rather than reproducing it.
+ *
+ * What is NOT here is any notion of how far the profile extends or how two road tiers
+ * reconcile — that belongs to the carve layer, which takes a minimum across every nearby
+ * tier.
  *
  * ZERO imports from Three.js, React, or browser globals (§12.5).
  */
