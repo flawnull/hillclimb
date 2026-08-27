@@ -7,7 +7,14 @@ export const runtime = "edge";
 
 export async function POST(req: NextRequest) {
   try {
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "127.0.0.1";
+    // Prefer `x-real-ip`, which the hosting platform sets itself. `x-forwarded-for` grows by
+    // appending at each proxy hop, so its LEFT-most entry is the one the original client can
+    // put anything it likes into — reading that first is the classic way to make an IP-keyed
+    // rate limit trivially bypassable. Fall back to the RIGHT-most forwarded entry, which is
+    // the one added by the nearest trusted proxy, rather than the left-most.
+    const forwarded = req.headers.get("x-forwarded-for");
+    const nearestHop = forwarded?.split(",").pop()?.trim();
+    const ip = req.headers.get("x-real-ip") || nearestHop || "127.0.0.1";
     const rl = await checkRateLimit(`start:${ip}`, 30, 60);
     if (!rl.success) {
       return NextResponse.json({ error: "Rate limit exceeded. Please wait a moment." }, { status: 429 });
