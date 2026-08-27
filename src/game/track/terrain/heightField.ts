@@ -70,12 +70,15 @@
  */
 
 import { TrackSpline } from "../TrackSpline";
-import { buildRoadIndex, RoadIndex, FieldBounds } from "./roadIndex";
+import { buildRoadIndex, hit, RoadHit, RoadIndex, FieldBounds } from "./roadIndex";
 import { buildBaseAltitude } from "./layers/baseAltitude";
 import { ridgeReliefAt, ridgeWeightAt } from "./layers/ridgeLayer";
-import { carveAt } from "./layers/roadCarveLayer";
+import { CARVE_RADIUS, carveFromHits } from "./layers/roadCarveLayer";
 import { VALLEY_FLOOR_ALT } from "./layers/roadProfile";
 import { valleyLandAt } from "./layers/valleyLayer";
+
+/** Step used by the slope probe's forward finite difference, metres. See `sampleAt`. */
+const SLOPE_STEP = 4;
 
 export const FIELD_PADDING = 2500;
 
@@ -118,18 +121,17 @@ export function createHeightField(spline: TrackSpline): HeightField {
   const distToRoute = (x: number, z: number): number => index.nearest(x, z).dist;
 
   /**
-   * Un-coloured ground height at an arbitrary point, reusing a caller-supplied
-   * `nearDist` instead of doing a fresh `index.nearest` call. This exists ONLY so the
-   * slope probe below (4 extra evaluations, offset by a couple of metres from the real
-   * point) can share the query budget with the main sample instead of quadrupling the
-   * spatial-query count: `near.dist` barely changes over a 2 m step, and `valleyLandAt`'s
-   * only use of distToRoute is a smoothstep ramp over VALLEY_SPAN = 900 m, so reusing the
-   * centre point's `nearDist` for a probe 2 m away is well within its own continuity
-   * tolerance. This mirrors sampleAt's own height logic exactly, parameterised on
-   * `nearDist` instead of recomputing it.
+   * Un-coloured ground height at an arbitrary point, given the CARVE_RADIUS-filtered hit
+   * list for THAT point (`hits`) and a caller-supplied `nearDist` instead of a fresh
+   * `index.nearest` call. Parameterising on both lets the slope probe below reuse a
+   * single shared candidate fetch across the centre point and its offset probes (see
+   * `sampleAt`) instead of paying a full spatial query per point: `near.dist` barely
+   * changes over a few-metre step, and `valleyLandAt`'s only use of distToRoute is a
+   * smoothstep ramp over VALLEY_SPAN = 900 m, so reusing the centre point's `nearDist`
+   * for a probe a few metres away is well within its own continuity tolerance.
    */
-  const heightRaw = (x: number, z: number, nearDist: number): number => {
-    const r = carveAt(x, z, index, () => valleyLandAt(base.sample(x, z), base.floor(x, z), nearDist));
+  const heightFromHits = (x: number, z: number, hits: RoadHit[], nearDist: number): number => {
+    const r = carveFromHits(hits, () => valleyLandAt(base.sample(x, z), base.floor(x, z), nearDist));
     if (r.nearestDist === Infinity) {
       return (
         valleyLandAt(base.sample(x, z), base.floor(x, z), nearDist) +
@@ -140,20 +142,26 @@ export function createHeightField(spline: TrackSpline): HeightField {
   };
 
   /**
-   * Local slope (gradient magnitude, m/m) at (x, z), by central finite difference over a
-   * 2 m half-step in both world axes. Four extra height evaluations via `heightRaw`
-   * (which reuses `nearDist` rather than re-querying `index.nearest` — see its doc) — no
-   * additional `index.nearest` calls beyond the one `sampleAt` already makes per point.
+   * Re-projects an already-fetched hit list onto a nearby point, by recomputing each
+   * hit's `sample`'s `dist`/`lat` against the NEW (x, z) instead of running a fresh
+   * `index.query`. Used only for the slope probe's offset points (see `sampleAt`): the
+   * expensive part of `index.query` is the grid-bucket walk that finds which road
+   * samples are even in the neighbourhood, not the `hit()` distance calc on each one —
+   * and a point 4 m away from a centre that already ran that walk has essentially the
+   * same neighbourhood. `carveFromHits`'s own falloff already clamps to 0 for any hit
+   * whose recomputed `dist` has drifted past CARVE_RADIUS (`t < 0 -> c = 0`), so no
+   * re-filtering is needed here — a slightly stale candidate set just contributes
+   * nothing once it's actually out of range, exactly as a fresh query's absence of that
+   * candidate would. The only inexactness this trades away is candidates that would have
+   * newly ENTERED CARVE_RADIUS at the offset point but weren't within it at the centre —
+   * a boundary case affecting only the auxiliary slope estimate (never the displayed
+   * height/colour at the offset point itself, which nothing here computes), and one the
+   * wide rock-band smoothstep (colorFor above) doesn't need precise.
    */
-  const slopeAt = (x: number, z: number, nearDist: number): number => {
-    const e = 2;
-    const hx1 = heightRaw(x + e, z, nearDist);
-    const hx2 = heightRaw(x - e, z, nearDist);
-    const hz1 = heightRaw(x, z + e, nearDist);
-    const hz2 = heightRaw(x, z - e, nearDist);
-    const dhdx = (hx1 - hx2) / (2 * e);
-    const dhdz = (hz1 - hz2) / (2 * e);
-    return Math.sqrt(dhdx * dhdx + dhdz * dhdz);
+  const reproject = (x: number, z: number, hits: RoadHit[]): RoadHit[] => {
+    const out: RoadHit[] = new Array(hits.length);
+    for (let i = 0; i < hits.length; i++) out[i] = hit(hits[i].sample, x, z);
+    return out;
   };
 
   function smoothstep(edge0: number, edge1: number, x: number): number {
@@ -268,6 +276,13 @@ export function createHeightField(spline: TrackSpline): HeightField {
     // query per point, as before).
     const near = index.nearest(x, z);
 
+    // The one real spatial query per point, exactly as before this fix: `index.query`
+    // does the expensive grid-bucket walk once, for the centre point. The slope probe's
+    // two offset points below reuse THESE hits via `reproject` instead of each running
+    // their own `index.query` — see `reproject`'s doc for why that is a safe, cheap
+    // substitute for a fresh query a few metres away.
+    const centreHits = index.query(x, z, CARVE_RADIUS);
+
     // Constant closure (see module doc above): ignores the `nearestDist` argument carveAt
     // passes in entirely, so it is trivially constant in that argument regardless of what
     // valleyLandAt computes — satisfying carveAt's landAt contract by construction. This is
@@ -277,7 +292,10 @@ export function createHeightField(spline: TrackSpline): HeightField {
     // land. Both base.sample and base.floor are continuous bilinear grid reads and near.dist
     // is continuous everywhere (distance-to-a-point-set is 1-Lipschitz), so this closure has
     // no discrete lookup left in it anywhere.
-    const r = carveAt(x, z, index, () => valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist));
+    const r = carveFromHits(
+      centreHits,
+      () => valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist)
+    );
 
     let height: number;
     if (r.nearestDist === Infinity) {
@@ -299,7 +317,25 @@ export function createHeightField(spline: TrackSpline): HeightField {
       height = r.height;
     }
 
-    const slope = slopeAt(x, z, near.dist);
+    // Local slope (gradient magnitude, m/m) by FORWARD finite difference over SLOPE_STEP
+    // in both world axes, against the already-known centre height. This used to be a
+    // central difference (x±2, z±2, four extra spatial queries); it is now forward-only
+    // (x+SLOPE_STEP, z+SLOPE_STEP against `height`, two `heightFromHits` calls, each
+    // reusing `centreHits` via `reproject` instead of running its own `index.query` — see
+    // `reproject`'s doc). The step is 4 m rather than the old 2 m half-step so the
+    // one-sided estimate keeps roughly the same baseline length a central estimate had (a
+    // forward difference at the old 2 m step would be noisier over locally-varying terrain
+    // like the carved road edge). The rock/scree band only consumes this through a wide
+    // smoothstep (0.8..1.5 m/m, colorFor above), so the truncation-error difference
+    // between a central and a forward estimate at this step does not show up as a visible
+    // change in the band — it only needs to distinguish "steep" from "shallow", not
+    // measure slope precisely.
+    const hx1 = heightFromHits(x + SLOPE_STEP, z, reproject(x + SLOPE_STEP, z, centreHits), near.dist);
+    const hz1 = heightFromHits(x, z + SLOPE_STEP, reproject(x, z + SLOPE_STEP, centreHits), near.dist);
+    const dhdx = (hx1 - height) / SLOPE_STEP;
+    const dhdz = (hz1 - height) / SLOPE_STEP;
+    const slope = Math.sqrt(dhdx * dhdx + dhdz * dhdz);
+
     return { height, color: colorFor(near, height, slope) };
   };
 

@@ -90,7 +90,7 @@
  * ZERO imports from Three.js, React, or browser globals (§12.5).
  */
 
-import { RoadIndex } from "../roadIndex";
+import { RoadHit, RoadIndex } from "../roadIndex";
 import { profileHeightAt } from "./roadProfile";
 
 export const CARVE_RADIUS = 90;
@@ -149,7 +149,29 @@ export function carveAt(
   index: RoadIndex,
   landAt: (nearestDist: number) => number
 ): CarveResult {
-  const hits = index.query(x, z, CARVE_RADIUS);
+  return carveFromHits(index.query(x, z, CARVE_RADIUS), landAt);
+}
+
+/**
+ * Same combination as `carveAt`, factored out so a caller that already has the
+ * CARVE_RADIUS-filtered hit list for (x, z) — computed some other way than
+ * `index.query` — can reuse this without a redundant spatial query.
+ *
+ * Introduced for the height field's slope probe (heightField.ts): probing a couple of
+ * metres away from a point that already ran `index.query` would otherwise re-walk the
+ * spatial grid from scratch for each offset, when the two points' CARVE_RADIUS
+ * neighbourhoods overlap almost entirely. The caller instead re-projects the centre
+ * point's already-fetched hits onto each offset point (cheap — no grid walk, just a
+ * `hit()` distance recompute per already-known sample; see heightField.ts's `reproject`)
+ * and calls this function once per probe point. The combination logic itself (fade,
+ * seeded minimum) is unchanged from `carveAt` — only how `hits` gets built differs; the
+ * falloff below already clamps any hit whose recomputed distance drifted past
+ * CARVE_RADIUS to zero weight, so a stale/unfiltered `hits` array is harmless.
+ */
+export function carveFromHits(
+  hits: RoadHit[],
+  landAt: (nearestDist: number) => number
+): CarveResult {
   if (hits.length === 0) {
     return { height: landAt(Infinity), weight: 0, nearestDist: Infinity };
   }

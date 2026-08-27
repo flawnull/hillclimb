@@ -33,7 +33,7 @@ export interface RoadIndex {
 
 const CELL = 32;
 
-function hit(s: SplineSample, x: number, z: number): RoadHit {
+export function hit(s: SplineSample, x: number, z: number): RoadHit {
   const dx = x - s.x;
   const dz = z - s.z;
   return {
