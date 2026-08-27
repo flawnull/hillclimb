@@ -13,7 +13,8 @@
     "test:math": "tsx --test tests/deterministic-math.test.ts",
     "build:verify": "NEXT_DIST_DIR=.next-verify next build",
     "visual-check": "tsx scripts/visual-check.ts",
-    "smoke": "tsx scripts/smoke-test.ts"
+    "smoke": "tsx scripts/smoke-test.ts",
+    "finish-run": "tsx scripts/finish-run.ts"
   },
   "dependencies": {
     "@upstash/ratelimit": "^2.0.5",

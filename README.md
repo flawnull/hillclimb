@@ -85,8 +85,12 @@ Two browser-driven scripts cover what unit tests cannot. Both need a dev server
 ```bash
 npm run smoke          # starts a run, drives, checks the timer, modals and shortcuts
 npm run visual-check   # captures fixed camera poses per stage to scratch/visual/
+npm run finish-run     # drives a full stage to the finish line (~3 min of real time)
 ```
 
 `smoke` exercises the paths that span React, the imperative renderer and the input layer at
-once — exactly where a regression hides from `npm test`. `visual-check` renders from fixed
+once — exactly where a regression hides from `npm test`. `finish-run` installs a driver
+inside the page and plays a stage through to the line, which is the only way to cover the
+finish callback, personal-best save and result modal; the simulation is locked to real time
+by `requestAnimationFrame`, so it cannot be fast-forwarded. `visual-check` renders from fixed
 poses so terrain changes can be compared across runs; the screenshots above come from it.

@@ -31,6 +31,17 @@ export function useEngineLifecycle(selectedCarId: string, selectedStageId: strin
     return () => engine.destroy();
   }, [engine]);
 
+  // Development-only handle, alongside the __vbScene / __vbCamera / __vbSpline globals the
+  // renderer already exposes. `scripts/finish-run.ts` uses it to install an in-page driver
+  // and play a stage through to the finish line — the one path too slow (~3 minutes of real
+  // time) to sit in the ordinary smoke test, and the only way to exercise the finish
+  // callback, personal-best save and result modal end to end. Stripped from production
+  // builds by the NODE_ENV guard.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || typeof window === "undefined") return;
+    (window as unknown as { __vbEngine?: Engine }).__vbEngine = engine;
+  }, [engine]);
+
   const [activeCarDef, setActiveCarDef] = useState<CarDef>(CAR_DEFS[selectedCarId] || CAR_DEFS[DEFAULT_CAR_ID]);
 
   // Initialize stage spline in engine
