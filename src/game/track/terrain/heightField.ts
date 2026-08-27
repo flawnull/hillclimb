@@ -118,57 +118,127 @@ export function createHeightField(spline: TrackSpline): HeightField {
   const distToRoute = (x: number, z: number): number => index.nearest(x, z).dist;
 
   /**
-   * classifyAt's colour bands are keyed to the WINNING nearest road sample's own fields
-   * (`near.sample.y`, `near.sample.halfWidth`, `near.sample.altitude`) and its exact
-   * distance — not just carveAt's numeric `nearestDist`. Feeds off the same `near` and
-   * `y` sampleAt already has in hand; behaviour is unchanged from the pre-refactor
-   * classifyAt, just extracted so sampleAt can share it.
+   * Un-coloured ground height at an arbitrary point, reusing a caller-supplied
+   * `nearDist` instead of doing a fresh `index.nearest` call. This exists ONLY so the
+   * slope probe below (4 extra evaluations, offset by a couple of metres from the real
+   * point) can share the query budget with the main sample instead of quadrupling the
+   * spatial-query count: `near.dist` barely changes over a 2 m step, and `valleyLandAt`'s
+   * only use of distToRoute is a smoothstep ramp over VALLEY_SPAN = 900 m, so reusing the
+   * centre point's `nearDist` for a probe 2 m away is well within its own continuity
+   * tolerance. This mirrors sampleAt's own height logic exactly, parameterised on
+   * `nearDist` instead of recomputing it.
    */
-  const colorFor = (near: ReturnType<RoadIndex["nearest"]>, y: number): TerrainColor => {
+  const heightRaw = (x: number, z: number, nearDist: number): number => {
+    const r = carveAt(x, z, index, () => valleyLandAt(base.sample(x, z), base.floor(x, z), nearDist));
+    if (r.nearestDist === Infinity) {
+      return (
+        valleyLandAt(base.sample(x, z), base.floor(x, z), nearDist) +
+        ridgeWeightAt(nearDist) * (RIDGE_BASE + ridgeReliefAt(x, z) * RIDGE_SCALE)
+      );
+    }
+    return r.height;
+  };
+
+  /**
+   * Local slope (gradient magnitude, m/m) at (x, z), by central finite difference over a
+   * 2 m half-step in both world axes. Four extra height evaluations via `heightRaw`
+   * (which reuses `nearDist` rather than re-querying `index.nearest` — see its doc) — no
+   * additional `index.nearest` calls beyond the one `sampleAt` already makes per point.
+   */
+  const slopeAt = (x: number, z: number, nearDist: number): number => {
+    const e = 2;
+    const hx1 = heightRaw(x + e, z, nearDist);
+    const hx2 = heightRaw(x - e, z, nearDist);
+    const hz1 = heightRaw(x, z + e, nearDist);
+    const hz2 = heightRaw(x, z - e, nearDist);
+    const dhdx = (hx1 - hx2) / (2 * e);
+    const dhdz = (hz1 - hz2) / (2 * e);
+    return Math.sqrt(dhdx * dhdx + dhdz * dhdz);
+  };
+
+  function smoothstep(edge0: number, edge1: number, x: number): number {
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  function lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+  }
+
+  /**
+   * classifyAt's colour bands. Re-keyed off ABSOLUTE ALTITUDE and LOCAL SLOPE rather than
+   * height-relative-to-road (see module history / the bug this replaced): once the valley
+   * layer let terrain drop hundreds of metres away from the route, "rel < -8 far from the
+   * road" matched almost the entire landscape and painted it pale limestone. Only the
+   * near-road CUT band is still legitimately road-relative — it depicts the cut face beside
+   * the road itself, which by definition only exists near the road. Every band blends in
+   * smoothly (smoothstep-weighted lerps) rather than switching on a hard `if`, so no band
+   * boundary shows as a visible seam across the terrain.
+   */
+  const colorFor = (
+    near: ReturnType<RoadIndex["nearest"]>,
+    y: number,
+    slope: number
+  ): TerrainColor => {
     const rel = y - near.sample.y;
-    const alt = near.sample.altitude;
 
-    if (rel < -8 && near.dist > near.sample.halfWidth + 80) {
-      // Valley floor: pale limestone river gravel
-      return { r: 0.80, g: 0.81, b: 0.78 };
-    }
-    if (rel < -2.5) {
-      // Face of the drop: shaded rock and scree
-      const f = Math.min(1, -rel / 75);
-      return { r: 0.34 - f * 0.08, g: 0.35 - f * 0.05, b: 0.28 - f * 0.05 };
-    }
-    if (rel > 4.5 && near.dist < 200) {
-      // Sandstone/limestone cut on the mountain side
-      const cutT = Math.min(1, (rel - 4.5) / 12);
-      return { r: 0.48 + cutT * 0.08, g: 0.44 + cutT * 0.06, b: 0.38 + cutT * 0.05 };
-    }
-
-    // Smooth continuous vegetation gradient with altitude, using the SURFACE's own
-    // altitude in the far field so distant peaks go rocky rather than staying green.
-    const effAlt = near.dist < 200 ? alt : Math.max(alt, y);
-    const altT1 = Math.max(0, Math.min(1, (effAlt - 600) / 400));
-    const altT2 = Math.max(0, Math.min(1, (effAlt - 1000) / 450));
+    // --- Base layer: smooth continuous vegetation gradient with the SURFACE's own
+    // altitude (not the road's), so distant peaks and valleys read by what they actually
+    // are, not by proximity to a road sample.
+    const altT1 = smoothstep(600, 1000, y);
+    const altT2 = smoothstep(1000, 1450, y);
 
     const lowR = 0.26, lowG = 0.42, lowB = 0.18;
     const midR = 0.36, midG = 0.47, midB = 0.24;
     const highR = 0.54, highG = 0.54, highB = 0.42;
 
-    let r = lowR + (midR - lowR) * altT1;
-    let g = lowG + (midG - lowG) * altT1;
-    let b = lowB + (midB - lowB) * altT1;
+    let r = lerp(lowR, midR, altT1);
+    let g = lerp(lowG, midG, altT1);
+    let b = lerp(lowB, midB, altT1);
 
-    r += (highR - r) * altT2;
-    g += (highG - g) * altT2;
-    b += (highB - b) * altT2;
+    r = lerp(r, highR, altT2);
+    g = lerp(g, highG, altT2);
+    b = lerp(b, highB, altT2);
 
-    // Keep the valley floor's own band honest at very low elevations.
-    if (y < VALLEY_FLOOR_ALT + 5) {
-      r = Math.min(1, r + 0.10);
-      g = Math.min(1, g + 0.08);
-      b = Math.min(1, b + 0.10);
-    }
+    // --- Cut band: sandstone/limestone cut face on the mountain side of the road. Still
+    // road-relative by design (the feature it depicts only exists next to the road), gated
+    // both on how far above the road surface the point sits and on distance to the road,
+    // both blended in over a range rather than switched at a hard threshold.
+    const cutRise = smoothstep(2.5, 7.0, rel);
+    const cutNear = 1 - smoothstep(160, 200, near.dist);
+    const cutWeight = cutRise * cutNear;
+    const cutT = smoothstep(4.5, 16.5, rel);
+    const cutR = 0.48 + cutT * 0.08, cutG = 0.44 + cutT * 0.06, cutB = 0.38 + cutT * 0.05;
+    r = lerp(r, cutR, cutWeight);
+    g = lerp(g, cutG, cutWeight);
+    b = lerp(b, cutB, cutWeight);
 
-    return { r, g, b };
+    // --- Rock/scree band: keyed on LOCAL SLOPE, not altitude or road-relative height.
+    // Steep ground is bare rock wherever it occurs — a cliff beside the valley floor is as
+    // rocky as one near the summit. Blended over a range around ~1.2 m/m so there is no
+    // visible edge where the ground crosses the threshold.
+    const rockWeight = smoothstep(0.8, 1.5, slope);
+    const rf = Math.min(1, rockWeight);
+    const rockR = 0.34 - rf * 0.08, rockG = 0.35 - rf * 0.05, rockB = 0.28 - rf * 0.05;
+    r = lerp(r, rockR, rockWeight);
+    g = lerp(g, rockG, rockWeight);
+    b = lerp(b, rockB, rockWeight);
+
+    // --- Valley floor band: pale limestone river gravel, keyed on ABSOLUTE ALTITUDE —
+    // only within roughly 60 m above VALLEY_FLOOR_ALT, i.e. genuinely near the Borbera
+    // riverbed, not "anywhere lower than the road". Suppressed on steep faces (rockWeight)
+    // since a cliff down to the valley floor is rock, not flat gravel.
+    const floorWeight = (1 - smoothstep(VALLEY_FLOOR_ALT, VALLEY_FLOOR_ALT + 60, y)) * (1 - rockWeight);
+    const floorR = 0.80, floorG = 0.81, floorB = 0.78;
+    r = lerp(r, floorR, floorWeight);
+    g = lerp(g, floorG, floorWeight);
+    b = lerp(b, floorB, floorWeight);
+
+    return {
+      r: Math.max(0, Math.min(1, r)),
+      g: Math.max(0, Math.min(1, g)),
+      b: Math.max(0, Math.min(1, b)),
+    };
   };
 
   /**
@@ -229,7 +299,8 @@ export function createHeightField(spline: TrackSpline): HeightField {
       height = r.height;
     }
 
-    return { height, color: colorFor(near, height) };
+    const slope = slopeAt(x, z, near.dist);
+    return { height, color: colorFor(near, height, slope) };
   };
 
   return {
