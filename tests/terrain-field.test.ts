@@ -16,6 +16,7 @@ import { buildBaseAltitude } from "../src/game/track/terrain/layers/baseAltitude
 import { FIELD_PADDING } from "../src/game/track/terrain/heightField";
 import { ridgeReliefAt, ridgeWeightAt } from "../src/game/track/terrain/layers/ridgeLayer";
 import { carveAt, CARVE_RADIUS } from "../src/game/track/terrain/layers/roadCarveLayer";
+import { valleyLandAt, VALLEY_SPAN } from "../src/game/track/terrain/layers/valleyLayer";
 
 // Performance guard: the "never above the road" sweep below is O(samples * lateral steps)
 // per stage, each carveAt() doing a spatial query. Striding the SAMPLE loop (never the
@@ -232,6 +233,95 @@ describe("baseAltitude", () => {
     for (let i = 0; i < 50; i++) {
       const x = s.x + i * 37, z = s.z - i * 53;
       assert.equal(a.sample(x, z), b.sample(x, z));
+    }
+  });
+});
+
+describe("valleyLayer", () => {
+  it("returns base exactly at the road (distToRoute 0) and approaches floor at VALLEY_SPAN", () => {
+    // valleyLandAt is a pure blend of two numbers by a smoothstep of distToRoute/VALLEY_SPAN;
+    // this pins both ends of that blend directly, with no grid or spline involved.
+    assert.equal(valleyLandAt(1000, 400, 0), 1000, "distToRoute 0 should return base exactly");
+    // smoothstep saturates to exactly 1 at t=1, so VALLEY_SPAN itself should land on floor
+    // exactly (not just approximately).
+    assert.equal(valleyLandAt(1000, 400, VALLEY_SPAN), 400, "distToRoute VALLEY_SPAN should return floor exactly");
+    // And it stays there beyond VALLEY_SPAN (smoothstep's t is clamped to 1).
+    assert.equal(valleyLandAt(1000, 400, VALLEY_SPAN * 5), 400, "distToRoute beyond VALLEY_SPAN should stay at floor");
+  });
+
+  it("keeps ground far below the road on the far side of an exposed cresta-ebro section (the anti-moat assertion)", () => {
+    // This is the whole point of the layer: before this fix, roadCarveLayer's fade toward
+    // `land` had no notion of a floor below the road, so the ground plunged away from the
+    // ribbon and was dragged straight back up to road-altitude land within ~90 m (measured:
+    // cresta-ebro at 80% along the stage, road y=1563.5, exposure "both", dropDepth 1300 —
+    // lat 200 sat at road-34.8 and lat 1500 sat at road+54, i.e. the "valley" fully healed
+    // shut and climbed back above the plateau). A threshold of "at least 150 m below the
+    // road" at 400 m lateral would have FAILED against that pre-fix measurement (only ~35 m
+    // below at less than half the distance, and above the road entirely by 1500 m) and
+    // passes now that the floor grid gives the drop somewhere to actually settle.
+    const spline = new TrackSpline(getStageDef("cresta-ebro"));
+    const field = createHeightField(spline);
+    const all = spline.getAllSamples();
+    const s = all[Math.floor(all.length * 0.8)];
+    assert.equal(s.exposure, "both", "expected the stage's 80%-mark sample to be exposed both sides");
+
+    for (const side of [-1, 1]) {
+      const x = s.x + s.normalX * 400 * side;
+      const z = s.z + s.normalZ * 400 * side;
+      const h = field.heightAt(x, z);
+      assert.ok(
+        h < s.y - 150,
+        `lat ${400 * side}: ground ${h.toFixed(1)} is not well below road ${s.y.toFixed(1)} (moat healed shut)`
+      );
+    }
+  });
+
+  it("is continuous in distToRoute across the valley span", () => {
+    // valleyLandAt itself has no spline/grid dependence, so its continuity is walked here
+    // through the same real base/floor grids heightField uses, sweeping laterally off one
+    // road sample the same way roadCarveLayer's and baseAltitude's own continuity tests do.
+    //
+    // Tolerance at each step is derived from what was actually measured at that step, not a
+    // fresh magic slope constant: the step in `base` and the step in `floor` are exactly
+    // valleyLandAt's own inputs, so their measured deltas already bound how far a linear
+    // blend of them can move; what those two omit is the blend WEIGHT itself changing, whose
+    // max derivative is smoothstep's own well-known 1.5 (the same shape already reused for
+    // ridgeWeightAt and roadCarveLayer's falloff in this file and in heightField.ts),
+    // multiplied by the current gap between floor and base and by the step's own
+    // contribution to distToRoute.
+    const spline = new TrackSpline(getStageDef("borbera-sprint"));
+    const index = buildRoadIndex(spline, 1);
+    const base = buildBaseAltitude(spline, FIELD_PADDING);
+    const s = spline.getAllSamples()[500];
+    const step = 0.5;
+
+    const landAt = (x: number, z: number): number =>
+      valleyLandAt(base.sample(x, z), base.floor(x, z), index.nearest(x, z).dist);
+
+    function toleranceFor(x0: number, z0: number, x1: number, z1: number): number {
+      const dBase = Math.abs(base.sample(x1, z1) - base.sample(x0, z0));
+      const dFloor = Math.abs(base.floor(x1, z1) - base.floor(x0, z0));
+      const gap0 = Math.abs(base.floor(x0, z0) - base.sample(x0, z0));
+      const gap1 = Math.abs(base.floor(x1, z1) - base.sample(x1, z1));
+      const maxGap = Math.max(gap0, gap1);
+      const rampMax = 1.5 / VALLEY_SPAN; // smoothstep's max derivative
+      const dDist = Math.abs(index.nearest(x1, z1).dist - index.nearest(x0, z0).dist);
+      return (dBase + dFloor + maxGap * rampMax * dDist) * 1.25;
+    }
+
+    let prevX = s.x - s.normalX * 260, prevZ = s.z - s.normalZ * 260;
+    let prev = landAt(prevX, prevZ);
+    for (let lat = -259.5; lat <= 260; lat += step) {
+      const x = s.x + s.normalX * lat, z = s.z + s.normalZ * lat;
+      const h = landAt(x, z);
+      const tolerance = toleranceFor(prevX, prevZ, x, z);
+      assert.ok(
+        Math.abs(h - prev) <= tolerance + 1e-9,
+        `valleyLandAt jumped ${Math.abs(h - prev).toFixed(3)} m at lat ${lat} (tolerance ${tolerance.toFixed(3)} m)`
+      );
+      prev = h;
+      prevX = x;
+      prevZ = z;
     }
   });
 });

@@ -29,19 +29,42 @@
  * there in general... except `ridgeWeightAt` is 0 for any distance <= RIDGE_START (180 m),
  * and CARVE_RADIUS is only 90 m — strictly inside the flat zero region. So within
  * everything `carveAt` can ever see, `ridgeWeightAt(nearestDist) === 0` identically and
- * the closure reduces to plain `base.sample(x, z)`, which is trivially constant. The
- * closure passed to `carveAt` below is therefore just `() => base.sample(x, z)` — no
- * ridge term at all — and that is enough to satisfy the contract exactly, not by
- * approximation.
+ * the closure reduces to plain `base.sample(x, z)`, which is trivially constant. The ridge
+ * term is therefore left out of the closure entirely — no approximation needed.
+ *
+ * What the closure DOES include is the valley layer (valleyLayer.ts): `landAt` is
+ * `() => valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist)`, where
+ * `near = index.nearest(x, z)` is computed once, up front, and captured by the closure —
+ * it does not vary with the `nearestDist` argument carveAt itself passes in, so it is
+ * constant in that argument trivially, by construction, regardless of what valleyLandAt
+ * computes. (`near.dist` is a genuinely different distance from carveAt's own internal
+ * `nearestDist` — the winning sample under `index.nearest` need not be the same one that
+ * ends up nearest among carveAt's CARVE_RADIUS-limited hits — but the contract only
+ * requires the closure be insensitive to the argument it is called with, which this is.)
+ * `base.floor(x, z)` is a second IDW grid baked in `baseAltitude.ts` alongside the altitude
+ * grid — the blend of every route sample's own valley floor — read back bilinearly, so
+ * it is continuous the same way `base.sample` already is. (An earlier version of
+ * `valleyLandAt` took a `RoadHit` and read `dropDepth`/`exposure` off the single nearest
+ * road sample instead; that "nearest sample" pick is not continuous far from the road on a
+ * switchback stage — see valleyLayer.ts's module doc for the measured ~40 m/m discontinuity
+ * that forced the redesign to two grids.) This is why the drop profile no longer gets faded
+ * back up to bare road-altitude land: on the exposed side, `base.floor(x, z)` sits below
+ * `base.sample(x, z)`, so the floor the fade settles onto is an actual valley floor rather
+ * than the ribbon's own altitude.
  *
  * That means the ridge relief never reaches the player through `carveAt` at all — it is
  * only added explicitly in the `nearestDist === Infinity` branch below, i.e. strictly
  * beyond CARVE_RADIUS. The seam at exactly `nearestDist == CARVE_RADIUS` is continuous by
- * construction: approaching from inside, carveAt's closure returns `base.sample(x, z)`
- * (ridge weight 0, since CARVE_RADIUS=90 < RIDGE_START=180); approaching from outside, the
- * far-field branch returns `base.sample(x, z) + ridgeWeightAt(90) * (...)`, and
- * `ridgeWeightAt(90) === 0` since 90 < 180, so that term also vanishes — both sides equal
- * `base.sample(x, z)`, exactly, with no gap.
+ * construction: approaching from inside, carveAt's closure returns
+ * `valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist)`; approaching from outside,
+ * the far-field branch must add the ridge relief on top of that SAME valley-adjusted land,
+ * i.e. `valleyLandAt(...) + ridgeWeightAt(near.dist) * (...)`, and `ridgeWeightAt(90) === 0`
+ * since 90 < RIDGE_START=180, so that term vanishes there too — both sides equal
+ * `valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist)`, exactly, with no gap.
+ * Adding the ridge term to raw `base.sample(x, z)` instead (as the pre-valley-layer version
+ * of this file did) would reintroduce a seam wherever the valley adjustment is nonzero at
+ * `nearestDist == CARVE_RADIUS` (any point within VALLEY_SPAN = 900 m of the road, i.e.
+ * everywhere carveAt can ever see).
  *
  * ZERO imports from Three.js, React, or browser globals (§12.5).
  */
@@ -52,6 +75,7 @@ import { buildBaseAltitude } from "./layers/baseAltitude";
 import { ridgeReliefAt, ridgeWeightAt } from "./layers/ridgeLayer";
 import { carveAt } from "./layers/roadCarveLayer";
 import { VALLEY_FLOOR_ALT } from "./layers/roadProfile";
+import { valleyLandAt } from "./layers/valleyLayer";
 
 export const FIELD_PADDING = 2500;
 
@@ -168,23 +192,39 @@ export function createHeightField(spline: TrackSpline): HeightField {
    * IDENTICAL behaviour to before (per the review finding's explicit request).
    */
   const sampleAt = (x: number, z: number): TerrainSample => {
-    // Constant closure (see module doc above): ridgeWeightAt is 0 everywhere carveAt can
-    // see (nearestDist <= CARVE_RADIUS = 90 < RIDGE_START = 180), so this reduces to
-    // base.sample(x, z), satisfying carveAt's landAt contract exactly.
-    const r = carveAt(x, z, index, () => base.sample(x, z));
+    // `near` computed up front (this was already computed unconditionally below, for
+    // classifyAt's colour bands — just reordered so the valley closure can capture it too,
+    // with no extra spatial query: still exactly one `index.nearest` plus one `carveAt`
+    // query per point, as before).
     const near = index.nearest(x, z);
+
+    // Constant closure (see module doc above): ignores the `nearestDist` argument carveAt
+    // passes in entirely, so it is trivially constant in that argument regardless of what
+    // valleyLandAt computes — satisfying carveAt's landAt contract by construction. This is
+    // what gives the road's drop somewhere to drop TO: base.floor(x, z) is already below
+    // base.sample(x, z) wherever the surrounding route is exposed, so carveAt's fade
+    // settles onto an actual valley floor instead of climbing back to bare road-altitude
+    // land. Both base.sample and base.floor are continuous bilinear grid reads and near.dist
+    // is continuous everywhere (distance-to-a-point-set is 1-Lipschitz), so this closure has
+    // no discrete lookup left in it anywhere.
+    const r = carveAt(x, z, index, () => valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist));
 
     let height: number;
     if (r.nearestDist === Infinity) {
       // Beyond CARVE_RADIUS: no road tier is near enough to carve anything, so the ridge
-      // relief — omitted from the closure above by construction — belongs here instead.
-      // `near.dist` (just fetched above, not a second lookup) is exactly the distance
-      // this branch needs. Continuity at the seam (nearestDist == CARVE_RADIUS == 90):
-      // the branch above returns base.sample(x, z) (ridge weight 0 at d=90, since
-      // 90 < RIDGE_START=180); this branch returns
-      // base.sample(x, z) + ridgeWeightAt(90) * (...), and ridgeWeightAt(90) === 0 too —
-      // both sides equal base.sample(x, z) exactly.
-      height = base.sample(x, z) + ridgeWeightAt(near.dist) * (RIDGE_BASE + ridgeReliefAt(x, z) * RIDGE_SCALE);
+      // relief — omitted from the closure above by construction — belongs here instead,
+      // added on top of the SAME valley-adjusted land the closure above would have
+      // produced (not raw base.sample), so the seam at nearestDist == CARVE_RADIUS stays
+      // continuous even where the valley adjustment is nonzero. `near.dist` (fetched above,
+      // not a second lookup) is exactly the distance this branch needs. Continuity at the
+      // seam (nearestDist == CARVE_RADIUS == 90): the branch above returns
+      // valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist) (ridge weight 0 at
+      // d=90, since 90 < RIDGE_START=180); this branch returns
+      // valleyLandAt(...) + ridgeWeightAt(90) * (...), and ridgeWeightAt(90) === 0 too —
+      // both sides equal valleyLandAt(...) exactly.
+      height =
+        valleyLandAt(base.sample(x, z), base.floor(x, z), near.dist) +
+        ridgeWeightAt(near.dist) * (RIDGE_BASE + ridgeReliefAt(x, z) * RIDGE_SCALE);
     } else {
       height = r.height;
     }
