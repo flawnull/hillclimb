@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useId } from "react";
 import { StageDef } from "@/game/track/TrackSpline";
 import { CarDef } from "@/game/vehicle/cars";
 import { SplitRecord } from "@/game/timing/Timer";
 import { ReplayFrame, computeReplayHash } from "@/game/timing/ReplayRecorder";
 import { SIM_VERSION } from "@/game/vehicle/vehicleTuning";
+import { useModalDialog } from "@/ui/useModalDialog";
 
 import {
   Trophy,
@@ -32,6 +33,8 @@ interface ResultModalProps {
   onRestart: () => void;
   onSelectStage: () => void;
   onOpenLeaderboard?: () => void;
+  /** Dismiss the modal (e.g. Escape) without necessarily restarting the run. */
+  onClose?: () => void;
 }
 
 export const ResultModal: React.FC<ResultModalProps> = ({
@@ -48,7 +51,14 @@ export const ResultModal: React.FC<ResultModalProps> = ({
   onRestart,
   onSelectStage,
   onOpenLeaderboard,
+  onClose,
 }) => {
+  const titleId = useId();
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const { panelRef } = useModalDialog({
+    onClose: onClose || onRestart,
+    initialFocusRef: nameInputRef,
+  });
   const [playerName, setPlayerName] = useState<string>(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("vb_player_name") || "Ligurian Driver";
@@ -162,13 +172,20 @@ export const ResultModal: React.FC<ResultModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md font-mono select-none">
-      <div className="relative w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-2xl p-5 sm:p-6 shadow-2xl text-white max-h-[95vh] overflow-y-auto">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="relative w-full max-w-md bg-slate-900 border border-slate-700/80 rounded-2xl p-5 sm:p-6 shadow-2xl text-white max-h-[95vh] overflow-y-auto touch-auto"
+      >
         {/* Header */}
         <div className="text-center mb-4">
           <div className="inline-flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-amber-500/20 border-2 border-amber-400 mb-2 shadow-lg shadow-amber-500/30">
             <Trophy className="w-6 h-6 sm:w-7 sm:h-7 text-amber-400" />
           </div>
-          <h2 className="text-base sm:text-lg font-black tracking-widest uppercase text-white">
+          <h2 id={titleId} className="text-base sm:text-lg font-black tracking-widest uppercase text-white">
             STAGE COMPLETE
           </h2>
           <p className="text-xs text-slate-400">{stage.name} · {car.name}</p>
@@ -238,11 +255,13 @@ export const ResultModal: React.FC<ResultModalProps> = ({
           ) : (
             <div className="flex gap-2">
               <input
+                ref={nameInputRef}
                 type="text"
                 maxLength={24}
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
                 placeholder="Driver Name"
+                aria-label="Driver name for leaderboard submission"
                 className="flex-1 px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-amber-400 font-mono"
               />
               <button

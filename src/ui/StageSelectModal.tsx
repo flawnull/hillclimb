@@ -1,8 +1,9 @@
 "use client";
 
-import React from "react";
+import React, { useId } from "react";
 import { STAGE_LIST } from "@/game/track/stages";
 import { Mountain, Flag, Trophy, X, ArrowUpRight, Compass } from "lucide-react";
+import { useModalDialog } from "@/ui/useModalDialog";
 
 interface StageSelectModalProps {
   currentStageId: string;
@@ -15,15 +16,25 @@ export const StageSelectModal: React.FC<StageSelectModalProps> = ({
   onSelectStage,
   onClose,
 }) => {
+  const titleId = useId();
+  const { panelRef } = useModalDialog({ onClose });
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md font-mono select-none">
-      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl text-white">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="relative w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl p-5 shadow-2xl text-white"
+      >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-slate-800 mb-4">
           <div className="flex items-center gap-2.5">
             <Mountain className="w-5 h-5 text-amber-400" />
             <div>
-              <h2 className="text-base font-black tracking-wider uppercase text-amber-400">
+              <h2 id={titleId} className="text-base font-black tracking-wider uppercase text-amber-400">
                 Select Mountain Stage
               </h2>
               <p className="text-xs text-slate-400">Val Borbera · Ligurian Apennines</p>
@@ -31,6 +42,7 @@ export const StageSelectModal: React.FC<StageSelectModalProps> = ({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close stage selection"
             className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
           >
             <X className="w-4 h-4" />

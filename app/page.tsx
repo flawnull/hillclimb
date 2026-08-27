@@ -61,18 +61,16 @@ const GameCanvas = dynamic(
 );
 
 export default function HomePage() {
-  const {
-    selectedCarId,
-    selectedStageId,
-    selectedColorIndex,
-    selectCar,
-    selectStage,
-    showTuningPanel,
-    toggleTuningPanel,
-    settings,
-    savePersonalBest,
-    unlockCar,
-  } = useGameStore();
+  const selectedCarId = useGameStore((s) => s.selectedCarId);
+  const selectedStageId = useGameStore((s) => s.selectedStageId);
+  const selectedColorIndex = useGameStore((s) => s.selectedColorIndex);
+  const selectCar = useGameStore((s) => s.selectCar);
+  const selectStage = useGameStore((s) => s.selectStage);
+  const showTuningPanel = useGameStore((s) => s.showTuningPanel);
+  const toggleTuningPanel = useGameStore((s) => s.toggleTuningPanel);
+  const settings = useGameStore((s) => s.settings);
+  const savePersonalBest = useGameStore((s) => s.savePersonalBest);
+  const unlockCar = useGameStore((s) => s.unlockCar);
 
   // Active Stage and Spline
   const [stageDef, setStageDef] = useState<StageDef>(() => getStageDef(selectedStageId));
@@ -325,6 +323,7 @@ export default function HomePage() {
           <div className="flex items-center gap-1 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 p-1 rounded-xl shadow-xl">
             <button
               onClick={handlePrevCar}
+              aria-label="Previous car"
               className="p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition"
             >
               <ChevronLeft className="w-4 h-4" />
@@ -337,6 +336,7 @@ export default function HomePage() {
             </div>
             <button
               onClick={handleNextCar}
+              aria-label="Next car"
               className="p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition"
             >
               <ChevronRight className="w-4 h-4" />
@@ -362,6 +362,7 @@ export default function HomePage() {
             onClick={handleResetRun}
             className="hud-btn flex items-center justify-center p-2 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 hover:border-amber-500/60 rounded-xl text-slate-300 hover:text-white transition shadow-lg active:scale-95"
             title="Reset to Start (R)"
+            aria-label="Reset to start"
           >
             <RotateCcw className="w-4 h-4 text-amber-400" />
           </button>
@@ -371,6 +372,7 @@ export default function HomePage() {
             onClick={handleToggleMute}
             className="hud-btn flex items-center justify-center p-2 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 hover:border-slate-600 rounded-xl text-slate-400 hover:text-white transition shadow-lg active:scale-95"
             title={isMuted ? "Unmute Engine Audio" : "Mute Engine Audio"}
+            aria-label={isMuted ? "Unmute engine audio" : "Mute engine audio"}
           >
             {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-amber-400" />}
           </button>
@@ -380,6 +382,7 @@ export default function HomePage() {
             onClick={() => setShowLeaderboardModal(true)}
             className="hud-btn flex items-center justify-center gap-1.5 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 hover:border-amber-500/50 px-2 sm:px-3 py-1.5 rounded-xl text-xs font-mono font-bold text-slate-200 hover:text-white transition shadow-lg active:scale-95"
             title="Global Leaderboard (L)"
+            aria-label="Open global leaderboard"
           >
             <Trophy className="w-4 h-4 text-amber-400" />
             <span className="hidden lg:inline">LEADERBOARD</span>
@@ -394,6 +397,8 @@ export default function HomePage() {
                 : "border-slate-800/90 text-slate-400 hover:text-white hover:border-slate-600"
             }`}
             title="Vehicle Tuning & Assists (T)"
+            aria-label="Toggle vehicle tuning panel"
+            aria-pressed={showTuningPanel}
           >
             <Sliders className="w-4 h-4" />
           </button>
@@ -465,6 +470,7 @@ export default function HomePage() {
             setShowResultModal(false);
             setShowLeaderboardModal(true);
           }}
+          onClose={handleResetRun}
         />
       )}
 

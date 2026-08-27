@@ -1,19 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useId } from "react";
 import { EngineRenderState, Engine } from "@/game/Engine";
 import { CAR_DEFS } from "@/game/vehicle/cars";
-import {
-  CORNER_STIFFNESS,
-  YAW_RESPONSE,
-  DOWNFORCE_K,
-  STEER_SPEED_SENSITIVITY,
-  HANDBRAKE_YAW_MUL,
-  GRADE_SCALE,
-  DRAG_COEFF,
-  ROLL_RESIST,
-} from "@/game/vehicle/vehicleTuning";
 import { Sliders, RefreshCw, X, Zap, Gauge, Compass } from "lucide-react";
+import { useModalDialog } from "@/ui/useModalDialog";
 
 interface TuningPanelProps {
   engine: Engine;
@@ -31,14 +22,12 @@ export const TuningPanel: React.FC<TuningPanelProps> = ({
   const [grip, setGrip] = useState(engine.vehicle.car.grip);
   const [mass, setMass] = useState(engine.vehicle.car.mass);
   const [brakeForce, setBrakeForce] = useState(engine.vehicle.car.brakeForce);
-  const [cornerStiffness, setCornerStiffness] = useState(CORNER_STIFFNESS);
-  const [yawResponse, setYawResponse] = useState(YAW_RESPONSE);
-  const [steerSensitivity, setSteerSensitivity] = useState(STEER_SPEED_SENSITIVITY);
-  const [downforceK, setDownforceK] = useState(DOWNFORCE_K);
-  const [gradeScale, setGradeScale] = useState(GRADE_SCALE);
 
   // Live telemetry (polled at 15 Hz to keep React light)
   const [telemetry, setTelemetry] = useState<EngineRenderState>({ ...renderStateRef.current });
+
+  const titleId = useId();
+  const { panelRef } = useModalDialog({ onClose });
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -66,23 +55,25 @@ export const TuningPanel: React.FC<TuningPanelProps> = ({
     setGrip(def.grip);
     setMass(def.mass);
     setBrakeForce(def.brakeForce);
-    setCornerStiffness(CORNER_STIFFNESS);
-    setYawResponse(YAW_RESPONSE);
-    setSteerSensitivity(STEER_SPEED_SENSITIVITY);
-    setDownforceK(DOWNFORCE_K);
-    setGradeScale(GRADE_SCALE);
     applyTuning(def.powerMul, def.grip, def.mass, def.brakeForce);
   };
 
   const slipDeg = (Math.abs(telemetry.slipAngle) * 180 / Math.PI).toFixed(1);
 
   return (
-    <div className="fixed top-4 left-4 z-50 w-84 sm:w-96 max-h-[92vh] overflow-y-auto bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl p-4 text-white shadow-2xl font-mono text-xs select-none">
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className="fixed top-4 left-4 z-50 w-84 sm:w-96 max-h-[92vh] overflow-y-auto touch-auto bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl p-4 text-white shadow-2xl font-mono text-xs select-none"
+    >
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-700/70 mb-3">
         <div className="flex items-center gap-2">
           <Sliders className="w-4 h-4 text-amber-400" />
-          <span className="font-bold text-sm tracking-wider uppercase text-amber-400">
+          <span id={titleId} className="font-bold text-sm tracking-wider uppercase text-amber-400">
             M1 Vehicle Tuning Panel
           </span>
         </div>
@@ -90,12 +81,14 @@ export const TuningPanel: React.FC<TuningPanelProps> = ({
           <button
             onClick={handleResetDefaults}
             title="Reset to default car values"
+            aria-label="Reset tuning to default car values"
             className="p-1 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded transition"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onClose}
+            aria-label="Close tuning panel"
             className="p-1 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded transition"
           >
             <X className="w-3.5 h-3.5" />
@@ -236,57 +229,6 @@ export const TuningPanel: React.FC<TuningPanelProps> = ({
               applyTuning(powerMul, grip, mass, v);
             }}
             className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-rose-400"
-          />
-        </div>
-
-        {/* Cornering Stiffness */}
-        <div>
-          <div className="flex justify-between text-[11px] mb-1">
-            <span className="text-slate-300">Cornering Stiffness (rad⁻¹)</span>
-            <span className="text-purple-400 font-bold">{cornerStiffness.toFixed(1)}</span>
-          </div>
-          <input
-            type="range"
-            min="8.0"
-            max="30.0"
-            step="1.0"
-            value={cornerStiffness}
-            onChange={(e) => setCornerStiffness(parseFloat(e.target.value))}
-            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-400"
-          />
-        </div>
-
-        {/* Yaw Response */}
-        <div>
-          <div className="flex justify-between text-[11px] mb-1">
-            <span className="text-slate-300">Yaw Response (rad/s)</span>
-            <span className="text-yellow-400 font-bold">{yawResponse.toFixed(1)}</span>
-          </div>
-          <input
-            type="range"
-            min="4.0"
-            max="20.0"
-            step="0.5"
-            value={yawResponse}
-            onChange={(e) => setYawResponse(parseFloat(e.target.value))}
-            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-yellow-400"
-          />
-        </div>
-
-        {/* Steer Speed Sensitivity */}
-        <div>
-          <div className="flex justify-between text-[11px] mb-1">
-            <span className="text-slate-300">Steer Speed Sensitivity (m/s)</span>
-            <span className="text-blue-400 font-bold">{steerSensitivity.toFixed(0)} m/s</span>
-          </div>
-          <input
-            type="range"
-            min="20.0"
-            max="70.0"
-            step="2.0"
-            value={steerSensitivity}
-            onChange={(e) => setSteerSensitivity(parseFloat(e.target.value))}
-            className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-400"
           />
         </div>
       </div>
