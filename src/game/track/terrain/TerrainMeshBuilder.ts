@@ -15,7 +15,7 @@
  * road-relative parameterization, and that parameterization was the root cause of both
  * the see-through holes and the terrain climbing onto the road, so this is the price.
  *
- * SKIRT PREDICATE — deliberately conservative (see task-7-report.md):
+ * SKIRT PREDICATE — deliberately conservative:
  *
  * `subdivide` decides whether a cell of size S stays a leaf using a CONSERVATIVE
  * distance — `distToRoute(centre) - S * 0.7071` — so a cell that only clips the corridor
@@ -112,7 +112,7 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
   // visited. Total distinct nodes in a quadtree with L leaves is O(L), not O(L * levels
   // queried), which is what turns the exact neighbour resolution below from "one full
   // root-to-leaf walk per edge, ~11 distToRoute calls, ~O(L) total" back down to
-  // "amortised O(1) extra per edge" (see the measured timings in task-7-report.md).
+  // "amortised O(1) extra per edge".
   const leafDecisionCache = new Map<string, boolean>();
   const isLeafCell = (x: number, z: number, size: number): boolean => {
     if (size <= MIN_LEAF) return true;

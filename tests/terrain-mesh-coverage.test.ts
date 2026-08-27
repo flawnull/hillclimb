@@ -126,7 +126,7 @@ describe("Terrain surface coverage", () => {
       // cross. A five-point cross straddling such a crease reads as flat (both arms
       // land at nearly the same height) while a quad spanning it departs by the full
       // depth of the V — that is exactly what defeated the first two attempts at this
-      // bound (point-slope, then chord sag; see task-7-report.md for both). This bound
+      // bound (point-slope, then chord sag). This bound
       // is honest rather than circular: it measures the field, not the mesh, and would
       // still catch a builder that sampled the wrong function, used a stale height, or
       // had an indexing bug, because any of those produce a vertex outside the range
@@ -204,7 +204,7 @@ describe("Terrain surface coverage", () => {
       const mesh = buildTerrainMesh(field);
       const pos = mesh.geometry.attributes.position;
 
-      // RULING (task-7-report.md, authorised deliberately, not a test-tuning fudge):
+      // RULING (authorised deliberately, not a test-tuning fudge):
       // the mesh stores positions as float32, whose ulp at these altitudes (~1700 m) is
       // ~1e-4 m. A vertex the field placed exactly at roadY - ROAD_CLEARANCE can round
       // UP by a fraction of an ulp on storage. That is storage precision, not a

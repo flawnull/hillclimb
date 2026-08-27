@@ -11,9 +11,7 @@
  * mountains; wherever it reached its 260 m maximum the two surfaces z-fought. Because
  * there is now exactly one surface, neither failure has a mechanism.
  *
- * HOW heightAt COMBINES THE LAYERS (this differs from the original Task 6 brief — see
- * task-5-report.md and the amendments recorded here, because Task 5's carveAt signature
- * changed under review):
+ * HOW heightAt COMBINES THE LAYERS:
  *
  * `carveAt(x, z, index, landAt)` already does its own spatial query and already fades
  * every candidate toward `landAt(nearestDist)` before combining — it hands back a faded,
