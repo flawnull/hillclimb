@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { EngineRenderState } from "../Engine";
 
 export class EffectsManager {
+  private scene: THREE.Scene;
   private particleCount = 180;
   private particlePositions: Float32Array;
   private particleAges: Float32Array;
@@ -21,6 +22,8 @@ export class EffectsManager {
   public skidLines: THREE.LineSegments;
 
   constructor(scene: THREE.Scene) {
+    this.scene = scene;
+
     // 1. Smoke & Dust Particles
     this.particlePositions = new Float32Array(this.particleCount * 3);
     this.particleAges = new Float32Array(this.particleCount);
@@ -127,5 +130,21 @@ export class EffectsManager {
     this.skidPositions.fill(0);
     this.skidWriteIdx = 0;
     (this.skidGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  /**
+   * Frees the smoke and skid-mark buffers this manager owns. Both `PointsMaterial` and
+   * `LineBasicMaterial` here are constructed fresh per instance — never routed through
+   * `batchStatics.ts`'s shared `canonicalMaterials` cache — so, unlike the road/guardrail
+   * meshes, disposing them outright is safe: nothing else references these instances.
+   */
+  public dispose(): void {
+    this.scene.remove(this.smokePoints);
+    this.smokeGeo.dispose();
+    (this.smokePoints.material as THREE.Material).dispose();
+
+    this.scene.remove(this.skidLines);
+    this.skidGeo.dispose();
+    (this.skidLines.material as THREE.Material).dispose();
   }
 }
