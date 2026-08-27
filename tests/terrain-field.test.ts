@@ -422,13 +422,14 @@ describe("roadCarveLayer", () => {
     assert.ok(probes > 50, `expected many stacked-tier probes, got ${probes}`);
   });
 
-  it("falls to zero weight beyond the carve radius", () => {
+  it("is inert beyond the carve radius: height falls through to the land exactly", () => {
     const spline = new TrackSpline(getStageDef("borbera-sprint"));
     const index = buildRoadIndex(spline, 1);
     const s = spline.getAllSamples()[400];
     const landAt = () => s.y + 200;
     const far = carveAt(s.x + s.normalX * 400, s.z + s.normalZ * 400, index, landAt);
-    assert.equal(far.weight, 0);
+    assert.equal(far.nearestDist, Infinity);
+    assert.equal(far.height, s.y + 200);
   });
 
   it("is continuous across the medial axis between two tiers", () => {
@@ -493,11 +494,11 @@ describe("roadCarveLayer", () => {
 });
 
 describe("HeightField", () => {
-  // Amendment D (see task-6 amendments): the brief's flat 2.5 m/m Lipschitz bound is
-  // withdrawn. A declared dropDepth cliff has an initial slope of depth * DROP_FALLOFF
+  // A flat 2.5 m/m Lipschitz bound on the field's slope does not hold and is not assumed
+  // here. A declared dropDepth cliff has an initial slope of depth * DROP_FALLOFF
   // (maxLegitSlopeForSample above), which can legitimately exceed 2.5 m/m — e.g. a 125 m
-  // drop starts at ~6.9 m/m (this is exactly the cliff task-5-report.md round 4 found and
-  // ruled real, not a defect). The bound here is derived per probe from the actual road
+  // drop starts at ~6.9 m/m, a real cliff shape produced by the profile itself, not a
+  // defect. The bound here is derived per probe from the actual road
   // samples carveAt would combine there (near field, mirroring roadCarveLayer's own
   // "is continuous across the medial axis" test's toleranceFor), or from the ridge layer's
   // own analytic gradient bound (far field, where no road tier is within CARVE_RADIUS of
@@ -560,8 +561,7 @@ describe("HeightField", () => {
         sawHit = true;
         const slope = maxProfileSlopeForSample(h.sample);
         if (slope > maxSlope) maxSlope = slope;
-        // SECOND near-field finding (also reported per amendment D's stop-and-report
-        // instruction, see task-6-report.md): carveAt's height is
+        // A second near-field finding: carveAt's height is
         // land + (proposed - land) * w, so its gradient includes a term
         // (proposed - land) * dw/dn that neither amendment D's literal formula nor
         // maxProfileSlopeForSample alone accounts for — both implicitly assumed `land`

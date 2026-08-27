@@ -19,7 +19,7 @@
  * construction instead (see the notes below) and held to account by a test rather than a
  * runtime cap.
  *
- * FADING TOWARD THE LAND, NOT A CONSTANT (fixed defect, see task-5-report.md round 1): the
+ * FADING TOWARD THE LAND, NOT A CONSTANT (fixed defect): the
  * first version of this file computed a per-hit C1 falloff `w` but only used it to
  * populate the `weight` output — every hit still contributed its raw `profileHeightAt` to
  * the combination at full strength regardless of distance, and vanished with no fade at
@@ -34,7 +34,7 @@
  * computes, land is passed in as a callback rather than looked up separately, so the
  * whole field still costs exactly one spatial query per point.
  *
- * NO HARD CLEARANCE CLAMP (fixed defect, see task-5-report.md round 2): an earlier version
+ * NO HARD CLEARANCE CLAMP (fixed defect): an earlier version
  * of this file also capped `height` below `sample.y - ROAD_CLEARANCE` for any hit whose
  * `|lat| <= halfWidth + VERGE_WIDTH + CLAMP_MARGIN`, on top of the combination above. That
  * clamp was itself a hard, unfaded, all-or-nothing per-hit contribution — the exact same
@@ -56,7 +56,7 @@
  * ever seems to fail, the fix is to restore `w_i == 1` at short range, not to cap the
  * output.
  *
- * PLAIN MINIMUM, NOT SOFT-MIN (fixed defect, see task-5-report.md round 3): this file used
+ * PLAIN MINIMUM, NOT SOFT-MIN (fixed defect): this file used
  * to combine candidates with a polynomial soft-min, `softMin(a,b,k) = min(a,b) -
  * h(a,b)^2 * k/4`, folded pairwise across every hit in sequence. That is wrong: soft-min
  * is not associative, so chaining it across N candidates does not approximate a single
@@ -120,8 +120,6 @@ const CORE_RADIUS = 12;
 export interface CarveResult {
   /** Carved ground height at this point. */
   height: number;
-  /** How much this point belongs to the road, 0..1. C1 in distance. */
-  weight: number;
   /**
    * Smallest `dist` among the contributing hits (Infinity if there were none). Returned
    * because callers on the hottest path (Task 6's heightAt, once per generated vertex)
@@ -142,6 +140,14 @@ export interface CarveResult {
  *   its asymptotic value by `nearestDist = CARVE_RADIUS` at the latest (saturating a
  *   margin before it is safer), so that `landAt(CARVE_RADIUS)` and `landAt(Infinity)`
  *   agree.
+ *
+ * `carveFromHits` below, not this function, is what the height field actually calls in
+ * production: heightField.ts's `sampleAt` already runs its own `index.query` (it needs the
+ * hit list for the slope probe too, via `reproject`), so it calls `carveFromHits` directly
+ * on hits it already has rather than paying for a second, redundant query through here.
+ * `carveAt` still exists as the convenient one-call form — do its own query, do the
+ * combination, return the result — and is what the test suite uses to exercise the
+ * combination logic without needing to build a hit list by hand.
  */
 export function carveAt(
   x: number,
@@ -153,9 +159,13 @@ export function carveAt(
 }
 
 /**
- * Same combination as `carveAt`, factored out so a caller that already has the
- * CARVE_RADIUS-filtered hit list for (x, z) — computed some other way than
- * `index.query` — can reuse this without a redundant spatial query.
+ * The combination logic itself: fold every hit into a seeded minimum, faded toward
+ * `landAt` by distance. This is what production calls (heightField.ts's `sampleAt`, on
+ * the hottest path in the renderer — once per generated terrain vertex, plus twice more
+ * for the slope probe's offset points), because it already has the CARVE_RADIUS-filtered
+ * hit list for (x, z) — computed via `index.query` for the centre point, or via
+ * `reproject` for a nearby probe point — and calling this directly avoids paying for a
+ * second, redundant spatial query that `carveAt` would otherwise run.
  *
  * Introduced for the height field's slope probe (heightField.ts): probing a couple of
  * metres away from a point that already ran `index.query` would otherwise re-walk the
@@ -173,7 +183,7 @@ export function carveFromHits(
   landAt: (nearestDist: number) => number
 ): CarveResult {
   if (hits.length === 0) {
-    return { height: landAt(Infinity), weight: 0, nearestDist: Infinity };
+    return { height: landAt(Infinity), nearestDist: Infinity };
   }
 
   let nearestDist = Infinity;
@@ -188,7 +198,6 @@ export function carveFromHits(
   // dependence on how many hits are nearby. See the module doc for why this replaced a
   // pairwise-folded soft-min, which compounded a bias proportional to candidate count.
   let height = land;
-  let weight = 0;
 
   for (const h of hits) {
     // C1 falloff with a flat core: exactly 1 within CORE_RADIUS, 0 at CARVE_RADIUS.
@@ -197,7 +206,6 @@ export function carveFromHits(
     const t = (CARVE_RADIUS - h.dist) / (CARVE_RADIUS - CORE_RADIUS);
     const c = t < 0 ? 0 : t > 1 ? 1 : t;
     const w = c * c * (3 - 2 * c);
-    if (w > weight) weight = w;
 
     // Blend this hit's raw profile proposal toward the surrounding land by its own
     // falloff weight, rather than admitting it at full strength up to a hard cutoff. At
@@ -211,5 +219,5 @@ export function carveFromHits(
     if (blended < height) height = blended;
   }
 
-  return { height, weight, nearestDist };
+  return { height, nearestDist };
 }
