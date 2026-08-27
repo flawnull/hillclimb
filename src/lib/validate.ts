@@ -31,6 +31,21 @@ export interface SubmitRunPayload {
 export interface ValidationResult {
   valid: boolean;
   reason?: string;
+  /**
+   * Values produced by the server's own re-simulation, present only when `valid`.
+   *
+   * Callers should persist THESE rather than the client's figures. The submitted time is
+   * only checked to within a 5 ms tolerance, so trusting it lets every submission shave up
+   * to 5 ms off its real result, and the submitted splits were never checked at all — they
+   * were stored verbatim. Since the authoritative numbers are computed here anyway,
+   * returning them removes both gaps at no cost.
+   */
+  verified?: {
+    rawTimeMs: number;
+    penaltyMs: number;
+    totalMs: number;
+    checkpointsMs: number[];
+  };
 }
 
 export async function validateRunSubmission(payload: SubmitRunPayload): Promise<ValidationResult> {
@@ -249,7 +264,15 @@ export async function validateRunSubmission(payload: SubmitRunPayload): Promise<
     return { valid: false, reason: "Replay did not complete the stage (final checkpoint never reached)" };
   }
 
-  return { valid: true };
+  return {
+    valid: true,
+    verified: {
+      rawTimeMs: simRawTimeMs,
+      penaltyMs: simPenaltyMs,
+      totalMs: simRawTimeMs + simPenaltyMs,
+      checkpointsMs: timer.getSplitsMs(),
+    },
+  };
 }
 
 

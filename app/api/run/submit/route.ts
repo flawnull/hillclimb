@@ -16,18 +16,23 @@ export async function POST(req: NextRequest) {
     }
 
     const payload: SubmitRunPayload = await req.json();
-    const { runId, stageId, carId, playerId, playerName, timeMs, penaltyMs, checkpointsMs } = payload;
+    const { runId, stageId, carId, playerId, playerName } = payload;
 
     // Validate submission with anti-cheat checks & headless simulation
     const validation = await validateRunSubmission(payload);
-    if (!validation.valid) {
+    if (!validation.valid || !validation.verified) {
       return NextResponse.json({ error: validation.reason || "Validation rejected" }, { status: 400 });
     }
+
+    // Persist the server's own re-simulated figures, never the client's. The submitted time
+    // is only verified to within a 5 ms tolerance, so storing it would let every submission
+    // shave up to 5 ms off its real result, and the submitted splits were never verified at
+    // all. The re-simulation already produced authoritative values for both.
+    const { rawTimeMs: timeMs, penaltyMs, totalMs: totalScoreMs, checkpointsMs } = validation.verified;
 
     const redis = getRedis();
     const car = CAR_DEFS[carId];
     const carClass = car ? car.className : "Classic";
-    const totalScoreMs = timeMs + (penaltyMs || 0);
     const playerKey = (playerId && playerId.trim()) || playerName.trim().toLowerCase();
 
     // 1. Store full run record
@@ -41,9 +46,9 @@ export async function POST(req: NextRequest) {
       playerName: playerName.trim(),
       playerKey,
       timeMs,
-      penaltyMs: penaltyMs || 0,
+      penaltyMs,
       totalScoreMs,
-      checkpointsMs: JSON.stringify(checkpointsMs || []),
+      checkpointsMs: JSON.stringify(checkpointsMs),
       createdAt: new Date().toISOString(),
     };
     await redis.hset(`run:${runId}`, runRecord);

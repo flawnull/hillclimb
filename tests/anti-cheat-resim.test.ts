@@ -807,5 +807,13 @@ describe("A completed run validates end to end", () => {
 
     const result = await validateRunSubmission(payload);
     assert.equal(result.valid, true, `A completed run must validate, but was rejected: ${result.reason}`);
+
+    // The route persists these rather than the client's figures: the submitted time is only
+    // checked to within 5 ms, and the submitted splits were never checked at all.
+    assert.ok(result.verified, "A valid result must carry the server's own re-simulated figures");
+    assert.equal(result.verified!.rawTimeMs, clientTimeMs);
+    assert.equal(result.verified!.penaltyMs, penaltyMs);
+    assert.equal(result.verified!.totalMs, clientTimeMs + penaltyMs);
+    assert.deepEqual(result.verified!.checkpointsMs, engine.timer.getSplitsMs());
   });
 });
