@@ -21,6 +21,14 @@ export class KeyboardController {
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleKeyDown);
       window.addEventListener('keyup', this.handleKeyUp);
+      // If focus leaves the window (alt-tab, a notification, opening devtools) while a key
+      // is physically held, the browser never delivers its `keyup` — the axis it drives
+      // would otherwise stay active forever, driving the car unattended. Clearing every
+      // held key on `blur` and on the document becoming hidden closes both paths.
+      window.addEventListener('blur', this.handleBlur);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
     }
   }
 
@@ -28,7 +36,14 @@ export class KeyboardController {
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', this.handleKeyDown);
       window.removeEventListener('keyup', this.handleKeyUp);
+      window.removeEventListener('blur', this.handleBlur);
     }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    }
+    // Listeners are gone, but `getAxes()` reads `keys` directly regardless of listener
+    // state — clear it too, or a key held at teardown keeps registering as pressed forever.
+    this.keys = {};
   }
 
   public onRestart(cb: () => void): void {
@@ -51,6 +66,16 @@ export class KeyboardController {
 
   private handleKeyUp = (e: KeyboardEvent): void => {
     this.keys[e.code] = false;
+  };
+
+  private handleBlur = (): void => {
+    this.keys = {};
+  };
+
+  private handleVisibilityChange = (): void => {
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.keys = {};
+    }
   };
 
   public getAxes(): KeyboardAxes {
