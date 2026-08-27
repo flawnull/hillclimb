@@ -68,6 +68,16 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
   // surface as skirt. Tagging at emission time is exact. See heightFieldSkirt below and
   // the coverage test, which reads this attribute instead of inferring from normals.
   const isSkirt: number[] = [];
+  // Maps a skirt-bottom vertex index to the top-edge vertex index it hangs beneath. Used
+  // after computeVertexNormals() to overwrite each skirt vertex's normal with its top
+  // vertex's normal (see the skirt block in emitLeaf and the post-processing pass below
+  // buildTerrainMesh's subdivide call): skirts are vertical apron geometry, so their
+  // OWN geometric normal points sideways and catches light completely differently from
+  // the ground surface they are stitching, reading as a pale streak. Borrowing the top
+  // vertex's normal makes a skirt shade identically to the surface above it and
+  // disappear, without touching `isSkirt` (still exact per-vertex, still what the
+  // coverage tests key off) or the skirt's actual geometry (still closing the LOD crack).
+  const skirtBottomToTop = new Map<number, number>();
 
   // AMENDMENT 1: sampleAt shares the single spatial query between height and colour,
   // instead of the brief's heightAt + classifyAt (two to three redundant queries per
@@ -187,16 +197,24 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
       const t1 = vertexAt(x1, z1);
       const y0 = positions[t0 * 3 + 1];
       const y1 = positions[t1 * 3 + 1];
-      const c0 = field.sampleAt(x0, z0).color;
+      // Each top vertex's colour was already computed by vertexAt's own field.sampleAt
+      // call and is sitting in `colors` at that vertex's index — read it back instead of
+      // querying the field a second time for the same point (saves a spatial query per
+      // skirt edge, and keeps each bottom vertex's colour exactly matched to the top
+      // vertex it hangs from, rather than both bottom vertices sharing t0's colour).
+      const c0r = colors[t0 * 3], c0g = colors[t0 * 3 + 1], c0b = colors[t0 * 3 + 2];
+      const c1r = colors[t1 * 3], c1g = colors[t1 * 3 + 1], c1b = colors[t1 * 3 + 2];
 
       const b0 = positions.length / 3;
       positions.push(x0, y0 - depth, z0);
-      colors.push(c0.r, c0.g, c0.b);
+      colors.push(c0r, c0g, c0b);
       isSkirt.push(1);
+      skirtBottomToTop.set(b0, t0);
       const b1 = positions.length / 3;
       positions.push(x1, y1 - depth, z1);
-      colors.push(c0.r, c0.g, c0.b);
+      colors.push(c1r, c1g, c1b);
       isSkirt.push(1);
+      skirtBottomToTop.set(b1, t1);
 
       indices.push(t0, b0, t1, t1, b0, b1);
       skirtTriangleCount += 2;
@@ -232,6 +250,29 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
   geometry.setAttribute("isSkirt", new THREE.Float32BufferAttribute(isSkirt, 1));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+
+  // Skirts are vertical apron faces (see the module doc and the skirt block above), so
+  // their geometric normal points roughly horizontally — nothing like the ground normal
+  // of the surface they are stitching a crack under. Lit that way, they catch light
+  // completely differently from their surroundings and read as pale streaks across
+  // hillsides, even though they are doing their job structurally (closing the crack).
+  // Fix: after normals are computed from the real geometry, overwrite every skirt-bottom
+  // vertex's normal with the normal of the top vertex it hangs from (recorded in
+  // `skirtBottomToTop` while emitting), so each skirt shades identically to the ground
+  // above it and disappears visually. This only rewrites the NORMAL attribute — `isSkirt`
+  // and the skirt's actual position/index data are untouched, so the coverage tests (which
+  // key off `isSkirt`, not normals) and the crack-closing geometry itself are unaffected.
+  const normalAttr = geometry.getAttribute("normal") as THREE.BufferAttribute;
+  for (const [bottomIdx, topIdx] of skirtBottomToTop) {
+    normalAttr.setXYZ(
+      bottomIdx,
+      normalAttr.getX(topIdx),
+      normalAttr.getY(topIdx),
+      normalAttr.getZ(topIdx)
+    );
+  }
+  normalAttr.needsUpdate = true;
+
   geometry.computeBoundingSphere();
 
   const material = new THREE.MeshStandardMaterial({
