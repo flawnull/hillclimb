@@ -78,3 +78,15 @@ The custom physics and rendering budgets are strictly enforced by a comprehensiv
 npm test
 ```
 *(Currently 169/169 physics, rendering, anti-cheat and mathematical constraint tests passing.)*
+
+Two browser-driven scripts cover what unit tests cannot. Both need a dev server
+(`PORT=3001 npm run dev`):
+
+```bash
+npm run smoke          # starts a run, drives, checks the timer, modals and shortcuts
+npm run visual-check   # captures fixed camera poses per stage to scratch/visual/
+```
+
+`smoke` exercises the paths that span React, the imperative renderer and the input layer at
+once — exactly where a regression hides from `npm test`. `visual-check` renders from fixed
+poses so terrain changes can be compared across runs; the screenshots above come from it.

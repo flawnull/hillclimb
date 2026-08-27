@@ -12,7 +12,8 @@
     "test:resim": "tsx --test tests/anti-cheat-resim.test.ts",
     "test:math": "tsx --test tests/deterministic-math.test.ts",
     "build:verify": "NEXT_DIST_DIR=.next-verify next build",
-    "visual-check": "tsx scripts/visual-check.ts"
+    "visual-check": "tsx scripts/visual-check.ts",
+    "smoke": "tsx scripts/smoke-test.ts"
   },
   "dependencies": {
     "@upstash/ratelimit": "^2.0.5",
