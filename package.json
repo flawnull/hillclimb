@@ -11,7 +11,8 @@
     "test": "tsx --test tests/*.test.ts",
     "test:resim": "tsx --test tests/anti-cheat-resim.test.ts",
     "test:math": "tsx --test tests/deterministic-math.test.ts",
-    "build:verify": "NEXT_DIST_DIR=.next-verify next build"
+    "build:verify": "NEXT_DIST_DIR=.next-verify next build",
+    "visual-check": "tsx scripts/visual-check.ts"
   },
   "dependencies": {
     "@react-three/drei": "^9.121.4",
@@ -33,6 +34,7 @@
     "@types/react-dom": "^18.3.5",
     "@types/three": "^0.173.0",
     "autoprefixer": "^10.4.20",
+    "playwright": "^1.62.1",
     "postcss": "^8.5.2",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.23.12",
