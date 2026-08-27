@@ -42,6 +42,18 @@ export interface EngineRenderState {
   lastSplit?: SplitRecord;
   lastPenalty?: PenaltyEvent;
   currentHairpin: number;
+  /**
+   * Monotonically increasing count of checkpoint-respawn teleports (off-road penalty).
+   * The renderer compares this against the last value it saw and snaps the chase camera
+   * with `ChaseCameraController.reset()` on any change, rather than lerping across the
+   * map. A counter — not a boolean flag — is used deliberately: a flag can be missed or
+   * cleared incorrectly if two respawns land in the same render frame (multiple physics
+   * substeps can run per frame), and it must never fire on an ordinary frame where no
+   * teleport happened. An always-increasing count read-and-compared each frame satisfies
+   * both: any change, by any amount, means "at least one teleport happened," and no
+   * change ever means "none did."
+   */
+  respawnCount: number;
 }
 
 export class Engine {
@@ -63,6 +75,7 @@ export class Engine {
   private lastPenalty?: PenaltyEvent;
   private currentHairpin: number = 0;
   private hairpinSValues: number[] = [];
+  private respawnCount: number = 0;
   private onFinishCallback?: (totalTimeSec: number, splits: SplitRecord[]) => void;
 
   private renderState: EngineRenderState = {
@@ -92,6 +105,7 @@ export class Engine {
     elapsedSeconds: 0,
     totalPenaltySeconds: 0,
     currentHairpin: 0,
+    respawnCount: 0,
   };
 
   private hasTriggeredFinish: boolean = false;
@@ -237,6 +251,7 @@ export class Engine {
     this.renderState.lastSplit = this.lastSplit;
     this.renderState.lastPenalty = this.lastPenalty;
     this.renderState.currentHairpin = this.currentHairpin;
+    this.renderState.respawnCount = this.respawnCount;
 
     return this.renderState;
   }
@@ -320,6 +335,7 @@ export class Engine {
           // Respawn at last checkpoint and sync cachedS
           this.vehicle.reset(this.lastCheckpointPos, this.lastCheckpointHeading, ground.baseAltitude);
           this.cachedS = this.lastCheckpointS;
+          this.respawnCount++;
         }
       } else {
         // Wall Side or Guardrail: solid contact. The car is clamped back to the road
