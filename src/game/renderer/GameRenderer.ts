@@ -184,6 +184,26 @@ export class GameRenderer {
     }
 
     // 1. Build RoadMesh (Ribbon + Verges + Guardrails + Props)
+    //
+    // Dispose the OUTGOING road meshes' geometries, but deliberately leave their materials
+    // alone. `mesh`, `guardrailGroup`, and `landmarkGroup` are removed from `trackGroup`
+    // above, but that only unlinks them from the scene graph — their GPU buffers stay
+    // allocated until disposed. `guardrailGroup` and `landmarkGroup` in particular are built
+    // by `batchStaticGroup` (batchStatics.ts), which hands out materials from a
+    // module-level `canonicalMaterials` cache keyed by content signature so that, e.g.,
+    // every stage's guardrail posts share one material instance instead of one each.
+    // Disposing a material here would dispose that SHARED instance and break rendering for
+    // every later stage that reuses the same signature, not just this one. Geometries carry
+    // no such sharing (each RoadMesh build produces its own fresh geometry, merged or not),
+    // so disposing only geometries is safe and plugs the leak without touching the cache.
+    if (this.roadMesh) {
+      for (const root of [this.roadMesh.mesh, this.roadMesh.guardrailGroup, this.roadMesh.landmarkGroup]) {
+        root.traverse((node) => {
+          const m = node as THREE.Mesh;
+          if (m.isMesh) m.geometry?.dispose();
+        });
+      }
+    }
     this.roadMesh = new RoadMesh(spline);
     this.trackGroup.add(this.roadMesh.mesh);
     this.trackGroup.add(this.roadMesh.guardrailGroup);
