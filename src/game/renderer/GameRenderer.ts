@@ -76,7 +76,11 @@ export class GameRenderer {
 
   // Dynamic Quality Auto-Scaler
   private lowFpsTimer = 0;
+  private highFpsTimer = 0;
   private currentDprScale = 1.0;
+
+  // Checkpoint respawn tracking, see the render loop's cameraController.reset() call.
+  private lastSeenRespawnCount = 0;
 
   // Active Car & Stage
   private activeCar: CarDef;
@@ -229,13 +233,7 @@ export class GameRenderer {
     // constructed per RoadMesh and owned by nobody else. Those must be disposed too, or every
     // stage change leaks a full asphalt texture.
     if (this.roadMesh) {
-      for (const root of [this.roadMesh.mesh, this.roadMesh.guardrailGroup, this.roadMesh.landmarkGroup]) {
-        root.traverse((node) => {
-          const m = node as THREE.Mesh;
-          if (m.isMesh) m.geometry?.dispose();
-        });
-      }
-      disposeOwnedMaterials(this.roadMesh.mesh);
+      this.disposeRoadMesh(this.roadMesh);
     }
     this.roadMesh = new RoadMesh(spline);
     this.trackGroup.add(this.roadMesh.mesh);
@@ -249,6 +247,37 @@ export class GameRenderer {
     this.trackGroup.add(this.terrain.mesh);
     this.trackGroup.add(this.terrain.riverMesh);
     this.trackGroup.add(this.terrain.vegetationGroup);
+  }
+
+  /**
+   * Disposes an outgoing RoadMesh's GPU resources along the same safe path `rebuildTrack`
+   * has always used: geometries everywhere (never shared), but materials ONLY on
+   * `roadMesh.mesh` (the road ribbon, freshly built and owned by nobody else). Deliberately
+   * skips materials on `guardrailGroup` and `landmarkGroup` — see the comment on
+   * `disposeOwnedMaterials` and in `rebuildTrack` above: those come from `batchStatics.ts`'s
+   * shared `canonicalMaterials` cache, and disposing one would break every later stage that
+   * reuses the same signature.
+   */
+  private disposeRoadMesh(roadMesh: RoadMesh): void {
+    for (const root of [roadMesh.mesh, roadMesh.guardrailGroup, roadMesh.landmarkGroup]) {
+      root.traverse((node) => {
+        const m = node as THREE.Mesh;
+        if (m.isMesh) m.geometry?.dispose();
+      });
+    }
+    disposeOwnedMaterials(roadMesh.mesh);
+  }
+
+  /**
+   * Disposes an outgoing car mesh's geometries and (unshared, freshly-built) materials.
+   * Extracted from `rebuildCarMesh` so `destroy()` can reuse the exact same path.
+   */
+  private disposeCarMesh(result: CarMeshResult): void {
+    result.carGroup.traverse((node) => {
+      const mesh = node as THREE.Mesh;
+      if (mesh.isMesh) mesh.geometry?.dispose();
+    });
+    disposeOwnedMaterials(result.carGroup);
   }
 
   private handleResize = (): void => {
@@ -281,11 +310,7 @@ export class GameRenderer {
     // the group from the scene only unlinks it; without this every car or colourway change
     // in the garage leaked the whole previous model's GPU memory.
     if (this.carMeshResult) {
-      this.carMeshResult.carGroup.traverse((node) => {
-        const mesh = node as THREE.Mesh;
-        if (mesh.isMesh) mesh.geometry?.dispose();
-      });
-      disposeOwnedMaterials(this.carMeshResult.carGroup);
+      this.disposeCarMesh(this.carMeshResult);
     }
 
     while (this.carGroup.children.length > 0) {
@@ -384,6 +409,16 @@ export class GameRenderer {
       // 7. Update Smoke & Skid Marks
       this.effectsManager.update(s, deltaSeconds);
 
+      // 7b. Snap the chase camera on checkpoint respawn instead of lerping across the map.
+      // `s.respawnCount` only ever increases, and only from Engine's off-road-penalty
+      // teleport, so any change here (even a jump of 2+, if two respawns landed inside
+      // the physics substeps of a single render frame) means at least one teleport
+      // happened this frame and none is missed; an unchanged count never fires spuriously.
+      if (s.respawnCount !== this.lastSeenRespawnCount) {
+        this.lastSeenRespawnCount = s.respawnCount;
+        this.cameraController.reset();
+      }
+
       // 8. Update Chase Camera & Sun Light Tracking
       this.cameraController.update(this.camera, this.scene, this.dirLight, s, deltaSeconds);
 
@@ -391,17 +426,42 @@ export class GameRenderer {
       this.renderer.render(this.scene, this.camera);
 
       // 10. Dynamic Quality Auto-Scaler
+      //
+      // Scaling down and scaling back up are NOT symmetric. A sustained low-FPS period
+      // (2.5s under 54 fps) drops resolution in 0.15 steps, same as before. But recovery
+      // used to only decay `lowFpsTimer` and never actually raise the scale back up or
+      // call `setPixelRatio` again — one transient stall (first-frame shader compile, a
+      // GC pause) permanently degraded resolution for the rest of the session.
+      //
+      // The fix mirrors the down-scale logic with its own timer (`highFpsTimer`, kept
+      // separate from `lowFpsTimer` so the two can't fight over the same accumulator from
+      // frame to frame) but requires a much longer sustained good-FPS window — 10s vs
+      // 2.5s — before stepping back up. Raising resolution is what caused the stall in the
+      // first place: more pixels means more GPU work, so re-raising it the moment FPS
+      // recovers risks immediately re-triggering the downscale and oscillating between
+      // the two. Being reluctant to scale up avoids that thrash.
       const currentFps = 1.0 / (deltaSeconds || 0.016);
+      const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
       if (currentFps < 54 && this.currentDprScale > 0.6) {
         this.lowFpsTimer += deltaSeconds;
+        this.highFpsTimer = 0;
         if (this.lowFpsTimer > 2.5) {
           this.currentDprScale = Math.max(0.6, this.currentDprScale - 0.15);
-          const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
           this.renderer.setPixelRatio(baseDpr * this.currentDprScale);
           this.lowFpsTimer = 0;
         }
-      } else if (currentFps > 58 && this.currentDprScale < 1.0) {
+      } else if (currentFps > 58) {
         this.lowFpsTimer = Math.max(0, this.lowFpsTimer - deltaSeconds);
+        if (this.currentDprScale < 1.0) {
+          this.highFpsTimer += deltaSeconds;
+          if (this.highFpsTimer > 10.0) {
+            this.currentDprScale = Math.min(1.0, this.currentDprScale + 0.15);
+            this.renderer.setPixelRatio(baseDpr * this.currentDprScale);
+            this.highFpsTimer = 0;
+          }
+        } else {
+          this.highFpsTimer = 0;
+        }
       }
 
       this.animationFrameId = requestAnimationFrame(renderLoop);
@@ -425,6 +485,23 @@ export class GameRenderer {
   public destroy(): void {
     this.stop();
     window.removeEventListener("resize", this.handleResize);
+
+    // `WebGLRenderer.dispose()` below only frees the renderer's own GPU-side program and
+    // state caches — it does NOT touch geometries, materials, or textures, which are owned
+    // by the scene objects that reference them. Without disposing those explicitly, every
+    // full unmount/remount of the game view leaks the whole scene: road ribbon, terrain,
+    // vegetation, car model, and the effects buffers.
+    if (this.carMeshResult) {
+      this.disposeCarMesh(this.carMeshResult);
+      this.carMeshResult = null;
+    }
+    this.effectsManager.dispose();
+    this.terrain?.dispose();
+    if (this.roadMesh) {
+      this.disposeRoadMesh(this.roadMesh);
+      this.roadMesh = null;
+    }
+
     this.renderer.forceContextLoss();
     this.renderer.dispose();
   }
