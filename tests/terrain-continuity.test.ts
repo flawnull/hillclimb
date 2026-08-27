@@ -18,6 +18,14 @@ import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
 import { TerrainSystem } from "../src/game/track/terrain/TerrainSystem";
 
+// "The terrain has no second surface" used to live here as its own describe block,
+// asserting `(system as any).backdropMesh === undefined`. That passed for any
+// TerrainSystem shape, including one that reintroduced a second surface under a
+// different field name — TerrainSystem never declares `backdropMesh`, so the assertion
+// was never exercising anything. The guarantee it was trying to express — there is
+// exactly one drawn surface, not two that can disagree — is what
+// terrain-mesh-coverage.test.ts's "a downward ray hits the terrain exactly once" test
+// actually checks, by raycasting the built mesh rather than inspecting field names.
 describe("Vegetation is grounded on the surface that is actually drawn", () => {
   for (const entry of STAGE_LIST) {
     it(`${entry.id}: every instance sits on the height field`, () => {
@@ -43,20 +51,6 @@ describe("Vegetation is grounded on the surface that is actually drawn", () => {
       // Instances are deliberately embedded a little into the ground; anything beyond
       // 1.5 m means the scatter is grounding against a different surface than the mesh.
       assert.ok(worst < 1.5, `${entry.id}: worst instance is ${worst.toFixed(2)} m off the field`);
-    });
-  }
-});
-
-describe("The terrain has no second surface", () => {
-  for (const entry of STAGE_LIST) {
-    it(`${entry.id}: TerrainSystem exposes no separate backdrop`, () => {
-      const spline = new TrackSpline(getStageDef(entry.id));
-      const system = new TerrainSystem(spline);
-      assert.equal(
-        (system as unknown as Record<string, unknown>).backdropMesh,
-        undefined,
-        "a separate backdrop surface is exactly the defect this refactor removed"
-      );
     });
   }
 });
