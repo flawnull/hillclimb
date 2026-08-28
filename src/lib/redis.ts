@@ -101,12 +101,25 @@ export function getRedis(): Redis | MockRedis {
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
   if (process.env.NODE_ENV === "production") {
-    if (!url || !token || url.includes("your-upstash") || token.includes("your-upstash")) {
+    // Name the specific fault. "Not properly configured" covers four different mistakes and
+    // sends you hunting through all of them; these messages appear in the platform logs and
+    // say which one it actually is. Neither the URL nor the token is ever echoed.
+    const problems: string[] = [];
+    if (!url) problems.push("UPSTASH_REDIS_REST_URL is not set");
+    else if (url.includes("your-upstash")) problems.push("UPSTASH_REDIS_REST_URL still holds the placeholder from .env.example");
+    else if (!url.startsWith("https://")) problems.push("UPSTASH_REDIS_REST_URL is not an https:// address — copy the REST URL, not the redis:// connection string");
+
+    if (!token) problems.push("UPSTASH_REDIS_REST_TOKEN is not set");
+    else if (token.includes("your-upstash")) problems.push("UPSTASH_REDIS_REST_TOKEN still holds the placeholder from .env.example");
+
+    if (problems.length > 0) {
       throw new Error(
-        "FATAL: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be properly configured in production environment."
+        `FATAL: Upstash Redis is not configured for production — ${problems.join("; ")}. ` +
+          "Set these in the project's environment variables (Production scope) and redeploy: " +
+          "environment variable changes do not apply to deployments that already exist."
       );
     }
-    return new Redis({ url, token });
+    return new Redis({ url: url!, token: token! });
   }
 
   if (url && token && !url.includes("your-upstash") && !token.includes("your-upstash")) {
