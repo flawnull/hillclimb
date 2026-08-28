@@ -71,6 +71,47 @@ To run the game locally, you'll need Node.js installed.
 
 > **Note**: Avoid running `npm run build` and `npm run dev` concurrently, as they share the `.next` directory and can cause cache corruption.
 
+## Deploying
+
+The game itself is fully client-side after the first load; only the leaderboard and run-token
+endpoints need a backend, and both are tiny Edge functions. Vercel's Hobby tier plus
+Upstash's free tier covers it at no cost.
+
+**1. Provision Redis.** Create a database at [upstash.com](https://upstash.com) (free tier:
+10k commands/day). Redis is not incidental here — the leaderboard is built on sorted sets
+(`ZADD`/`ZSCORE`/`ZREMRANGEBYRANK`) for ranked insertion with per-player deduplication and
+automatic trimming to the top 1000. Copy the REST URL and token.
+
+**2. Set environment variables** in the Vercel project settings. All three are required in
+production; the app fails loudly rather than silently degrading if any is missing:
+
+| Variable | Notes |
+|---|---|
+| `RUN_SECRET` | HMAC key for run tokens. Generate with `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`. **Never reuse the development fallback** — it is a literal in this public repository, and anyone could use it to mint valid tokens and post forged times. |
+| `UPSTASH_REDIS_REST_URL` | From step 1 |
+| `UPSTASH_REDIS_REST_TOKEN` | From step 1 |
+
+**3. Deploy.** Import the repository on Vercel; the defaults are correct for Next.js. The
+API routes run on the Edge runtime, which is what lets the anti-cheat re-simulation run close
+to the user.
+
+**4. Verify the deployment** by pointing the smoke test at it:
+
+```bash
+SMOKE_BASE_URL=https://your-app.vercel.app npm run smoke
+```
+
+It drives a real run in a headless browser and fails on any console error, so a missing
+environment variable or a broken build surfaces immediately.
+
+### Notes
+
+- Without Redis configured the game still plays; the leaderboard reports itself as
+  unavailable and personal bests continue to be stored locally in the browser.
+- `SIM_VERSION` keys the leaderboards. Changing anything on the simulation path re-keys them,
+  which retires existing entries by design — runs recorded under different physics must never
+  be ranked against each other.
+
 ## Testing
 
 The custom physics and rendering budgets are strictly enforced by a comprehensive test suite.

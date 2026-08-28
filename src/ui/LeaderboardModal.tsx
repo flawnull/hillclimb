@@ -33,19 +33,32 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
   const [selectedClass, setSelectedClass] = useState<CarClass | "Overall">("Overall");
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const titleId = useId();
   const { panelRef } = useModalDialog({ onClose });
 
   const fetchLeaderboard = async (stage: string, cls: string) => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const res = await fetch(`/api/leaderboard?stage=${stage}&class=${cls}&limit=50`);
       if (res.ok) {
         const data = await res.json();
         setEntries(data.entries || []);
+      } else {
+        // A failed request used to be swallowed here, leaving `entries` empty — so an
+        // outage or a missing Redis configuration rendered as "No times posted yet",
+        // which reads as a working but empty leaderboard rather than a broken one.
+        setEntries([]);
+        setLoadError(
+          res.status >= 500
+            ? "Leaderboard service is unavailable right now."
+            : "Could not load the leaderboard."
+        );
       }
-    } catch (e) {
-      console.error("Failed to load leaderboard:", e);
+    } catch {
+      setEntries([]);
+      setLoadError("Could not reach the leaderboard. Check your connection.");
     } finally {
       setIsLoading(false);
     }
@@ -143,6 +156,18 @@ export const LeaderboardModal: React.FC<LeaderboardModalProps> = ({
             <div className="h-full flex items-center justify-center text-slate-400 text-xs gap-2 py-12">
               <div className="w-4 h-4 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
               Loading rankings...
+            </div>
+          ) : loadError ? (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs py-12 px-4 text-center">
+              <Trophy className="w-8 h-8 text-slate-700 mb-2" />
+              <span className="text-rose-300">{loadError}</span>
+              <span className="text-[10px] text-slate-500 mt-1">Your time is saved locally either way.</span>
+              <button
+                onClick={() => fetchLeaderboard(selectedStage, selectedClass)}
+                className="mt-3 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold tracking-wide uppercase transition-colors"
+              >
+                Retry
+              </button>
             </div>
           ) : entries.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs py-12">
