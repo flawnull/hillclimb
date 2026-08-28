@@ -62,12 +62,17 @@ async function main(): Promise<void> {
     await page.goto(BASE, { waitUntil: "networkidle" });
 
     // --- The game mounts and the renderer comes up -------------------------------------
-    await page.waitForFunction(() => Boolean((window as never as Record<string, unknown>).__vbScene), null, {
-      timeout: 30_000,
-    });
-    check("renderer initialises", true);
+    // Wait on the DOM, not on the `__vb*` dev globals: those are stripped from production
+    // builds, and this script needs to work against a deployed URL as well as a dev server.
+    await page.waitForSelector("canvas", { timeout: 30_000 });
+    await page.waitForSelector(".hud-speedo", { timeout: 30_000 });
     check("canvas is present", (await page.locator("canvas").count()) > 0);
     check("HUD renders", (await page.locator(".hud-speedo").count()) > 0);
+
+    const devBuild = await page.evaluate(
+      () => Boolean((window as never as Record<string, unknown>).__vbScene)
+    );
+    console.log(`  info  ${devBuild ? "development" : "production"} build detected`);
 
     // --- A run starts and the car actually moves ---------------------------------------
     const speedBefore = await readSpeed(page);
@@ -158,6 +163,13 @@ async function main(): Promise<void> {
     }
 
     // --- Persistence: progress must survive a reload ----------------------------------
+    // Needs the dev-only store handle, so this section is skipped against production builds.
+    if (!devBuild) {
+      console.log("  skip  persistence check (needs the dev-only store handle)");
+      check("no console errors during the session", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | "));
+      return;
+    }
+
     // Regression guard. Unlocks, personal bests and settings were plain in-memory state, so
     // beating a gold time unlocked a car until the next page load and then silently lost it.
     // Drive the store through its own public action rather than writing storage directly, so
