@@ -168,6 +168,41 @@ async function main(): Promise<void> {
 
         const nameField = dialog.locator("input").first();
         check("result modal offers leaderboard submission", (await nameField.count()) > 0);
+
+        // --- Actually submit ------------------------------------------------------------
+        // The point of this test. Before the finish-frame fix, the recorder dropped the frame
+        // that crossed the line, so every replay was one frame short of its claimed time and
+        // the server re-simulation rejected it as a mismatch — no real run could ever be
+        // posted. Locally this runs against the in-memory MockRedis fallback.
+        if ((await nameField.count()) > 0) {
+          await nameField.fill("");
+          await nameField.type("Smoke Tester");
+
+          const submitButton = dialog.locator("button", { hasText: /post|submit/i }).first();
+          check("submit button is present", (await submitButton.count()) > 0);
+
+          if ((await submitButton.count()) > 0) {
+            await submitButton.click();
+
+            // Wait for either outcome rather than a fixed sleep.
+            let posted = false;
+            let errorText = "";
+            for (let waited = 0; waited < 20_000; waited += 500) {
+              await page.waitForTimeout(500);
+              const body = await dialog.innerText();
+              if (/posted successfully/i.test(body)) {
+                posted = true;
+                break;
+              }
+              const err = body.match(/(re-simulation mismatch|did not complete|validation rejected|submission failed|too many|invalid|error)[^\n]*/i);
+              if (err) {
+                errorText = err[0];
+                break;
+              }
+            }
+            check("run posts to the leaderboard", posted, errorText || "no success message appeared");
+          }
+        }
       }
     }
 
