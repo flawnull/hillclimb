@@ -33,6 +33,7 @@ import {
   SLIP_SMOKE_THRESHOLD_RAD,
   SURFACE_PROPERTIES,
   SurfaceType,
+  REVERSE_MAX_SPEED,
 } from "./vehicleTuning";
 
 export interface Vec2 {
@@ -56,6 +57,8 @@ export interface VehicleState {
   brake: number;         // 0..1 smoothed input
   handbrake: boolean;
   gear: number;          // 1..6 (visual/audio)
+  /** True once the car has stopped with the brake released: reverse may now be selected. */
+  reverseArmed: boolean;
   rpm: number;           // 800..7500
   speedKmh: number;      // km/h
   speedMs: number;       // m/s
@@ -130,6 +133,11 @@ export class VehicleModel {
       brake: 0,
       handbrake: false,
       gear: 1,
+      // A car that is already stationary with the brake released is legitimately ready for
+      // reverse: stop, press brake, reverse. What must never happen is rolling INTO reverse
+      // while braking from speed, and that is prevented by the throttle/brake conditions in
+      // step() rather than by starting disarmed.
+      reverseArmed: true,
       rpm: 900,
       speedKmh: 0,
       speedMs: 0,
@@ -252,9 +260,27 @@ export class VehicleModel {
       engineMultiplier *= (1.0 - RWD_OVERSTEER_POWER_PENALTY);
     }
 
-    // Reverse gear handling
+    // Reverse gear handling.
+    //
+    // Reverse must be SELECTED, not fallen into. The previous condition engaged reverse
+    // whenever the brake was held below 0.35 m/s — so braking into a hairpin rolled straight
+    // through zero and started accelerating backwards while the player was still holding what
+    // they believed was the brake. And because `vForward` is then negative, the condition
+    // stayed true indefinitely: the car accelerated backwards without limit, reaching 30 km/h
+    // in reverse. Steering then appears inverted on screen, because the front wheels still
+    // turn the way you asked but the car is travelling the other way.
+    //
+    // The rule now: come to a stop, RELEASE the brake, then hold it again. Touching the
+    // throttle always cancels reverse. This is the standard arcade convention and it makes
+    // reverse impossible to enter by accident while braking.
+    if (input.throttle > 0.05) {
+      s.reverseArmed = false;
+    } else if (vForward < 0.3 && s.brake < 0.05) {
+      s.reverseArmed = true;
+    }
+
     let F_engine = 0;
-    const isReversing = (input.reverse || (s.brake > 0.1 && input.throttle === 0)) && vForward <= 0.35;
+    const isReversing = s.reverseArmed && s.brake > 0.1 && input.throttle === 0 && vForward <= 0.35;
     if (isReversing) {
       const reverseDemand = Math.max(s.throttle, s.brake);
       F_engine = -reverseDemand * BASE_ENGINE_FORCE * 1.15 * car.powerMul * surfaceGrip;
@@ -336,6 +362,12 @@ export class VehicleModel {
 
     // 7. Integrate Velocity in Local Coordinates (with rotating body-frame centripetal term)
     let newVForward = vForward + a_longitudinal * dt;
+
+    // Reverse is speed-limited. Nothing capped it before, so holding the brake accelerated
+    // the car backwards indefinitely.
+    if (newVForward < -REVERSE_MAX_SPEED) {
+      newVForward = -REVERSE_MAX_SPEED;
+    }
     let newVLateral = vLateral + (F_lateral / car.mass - vForward * s.yawRate) * dt;
 
     // Low-speed damping and parking brake hold

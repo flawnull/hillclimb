@@ -47,8 +47,15 @@
  *   144 km/h — sim conventions that assume an analog wheel. Cornering stiffness, yaw response,
  *   the digital steering ramp, the return rate and the high-speed steering floor all changed,
  *   so lap times under the new handling are not comparable to the old ones.
+ *
+ * 7 -> 8: reverse could be entered by accident. Braking below 0.35 m/s engaged it, and since
+ *   the condition tested forward velocity it stayed true once moving backwards, so the car
+ *   accelerated in reverse without limit while the player held what they thought was the
+ *   brake — reaching 30 km/h backwards, at which point steering looks inverted on screen.
+ *   Reverse must now be selected (stop, release the brake, hold it again), any throttle
+ *   cancels it, and reverse speed is capped at REVERSE_MAX_SPEED.
  */
-export const SIM_VERSION = 7;
+export const SIM_VERSION = 8;
 
 /*
  * Version history — append a line whenever this is bumped.
@@ -124,6 +131,9 @@ export const STEER_RETURN_RATE = 7.5;
 
 /** Throttle / Brake digital ramp rate (0 to 1 in 0.1s) */
 export const PEDAL_RAMP_RATE = 10.0;
+
+/** Maximum reverse speed in m/s (~22 km/h). Reversing is for manoeuvring, not for racing. */
+export const REVERSE_MAX_SPEED = 6.0;
 
 /** Handbrake yaw rotation multiplier (encourages hairpin rotation) */
 export const HANDBRAKE_YAW_MUL = 1.6;

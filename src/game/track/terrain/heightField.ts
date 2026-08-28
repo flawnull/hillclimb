@@ -184,7 +184,9 @@ export function createHeightField(spline: TrackSpline): HeightField {
   const colorFor = (
     near: ReturnType<RoadIndex["nearest"]>,
     y: number,
-    slope: number
+    slope: number,
+    worldX: number,
+    worldZ: number
   ): TerrainColor => {
     const rel = y - near.sample.y;
 
@@ -239,6 +241,22 @@ export function createHeightField(spline: TrackSpline): HeightField {
     r = lerp(r, floorR, floorWeight);
     g = lerp(g, floorG, floorWeight);
     b = lerp(b, floorB, floorWeight);
+
+    // --- Macro variation ---------------------------------------------------------------
+    // Every band above is a single flat tone spread over hundreds of metres, which is what
+    // makes the ground read as painted cardboard however much relief it has: real hillsides
+    // are patchy with grass, scrub, bare earth and shadowed hollows. Two overlapping
+    // low-frequency waves (roughly 60 m and 23 m) shift the tone by a few percent, biased
+    // green-to-brown rather than just light-to-dark so it reads as varied ground cover
+    // rather than uneven lighting. Deterministic in world position, so it is stable across
+    // rebuilds and identical on every client.
+    const patch =
+      Math.sin(worldX * 0.0165 + worldZ * 0.0091) * 0.5 +
+      Math.sin(worldX * 0.0427 - worldZ * 0.0338 + 2.1) * 0.3;
+    const tint = patch * 0.055;
+    r += tint * 1.15;
+    g += tint * 0.85;
+    b += tint * 0.5;
 
     return {
       r: Math.max(0, Math.min(1, r)),
@@ -334,7 +352,7 @@ export function createHeightField(spline: TrackSpline): HeightField {
     const dhdz = (hz1 - height) / SLOPE_STEP;
     const slope = Math.sqrt(dhdx * dhdx + dhdz * dhdz);
 
-    return { height, color: colorFor(near, height, slope) };
+    return { height, color: colorFor(near, height, slope, x, z) };
   };
 
   return {

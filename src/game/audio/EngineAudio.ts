@@ -119,7 +119,7 @@ export class EngineAudio {
 
       const gritFilter = this.ctx.createBiquadFilter();
       gritFilter.type = "lowpass";
-      gritFilter.frequency.value = 700;
+      gritFilter.frequency.value = 1500;
       gritFilter.Q.value = 0.8;
 
       this.gritGain = this.ctx.createGain();
@@ -226,7 +226,10 @@ export class EngineAudio {
 
       // Lowpass cutoff opens smoothly with throttle and RPM
       const rpmNorm = Math.min(1.0, Math.max(0, (rpm - 800) / 6700));
-      const targetCutoff = this.carToneFilterFreq + rpmNorm * 1100 + throttle * 1400;
+      // Wider cutoff sweep. The old ceiling kept everything below roughly 2.7 kHz, which
+      // muffles the noise component into a hum and leaves the oscillator fundamental as the
+      // only thing clearly audible.
+      const targetCutoff = this.carToneFilterFreq + rpmNorm * 1900 + throttle * 2300;
       this.filter.frequency.setTargetAtTime(targetCutoff, now, 0.05);
 
       // Engine volume slightly louder on throttle
@@ -236,8 +239,13 @@ export class EngineAudio {
       // Combustion grit tracks load: barely there at idle, prominent under power. Ramped
       // faster than the volume so the roughness arrives with the throttle rather than
       // swelling in behind it.
+      // Grit has to dominate, not garnish. At the previous levels the oscillator stack was
+      // still the loudest thing in the mix, so the result remained a clean pitched tone
+      // sliding with RPM — the synthesiser quality the whole change was meant to remove.
+      // Combustion is mostly broadband; the oscillators should read as the pitch underneath
+      // it rather than as the sound itself.
       if (this.gritGain) {
-        const gritTarget = 0.05 + throttle * 0.30 + rpmNorm * 0.14;
+        const gritTarget = 0.22 + throttle * 0.62 + rpmNorm * 0.30;
         this.gritGain.gain.setTargetAtTime(gritTarget, now, 0.03);
       }
     }
