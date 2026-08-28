@@ -173,13 +173,19 @@ export class GameRenderer {
     }
 
     // 3. Lighting
-    this.ambientLight = new THREE.AmbientLight("#dbeafe", 0.70);
+    // Fill light was doing too much: ambient 0.70 plus hemisphere 0.65 is ~1.35 of
+    // direction-less light against a 1.85 sun, so slopes facing away from the sun were
+    // almost as bright as slopes facing it. Terrain read as flat paper regardless of how
+    // much relief the height field actually produced. Cutting the fill roughly in half and
+    // lifting the sun restores the light-and-shade that gives landforms their shape, while
+    // the hemisphere's ground tint still keeps shadowed faces from going black.
+    this.ambientLight = new THREE.AmbientLight("#dbeafe", 0.34);
     this.scene.add(this.ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight("#e0f2fe", "#475569", 0.65);
+    const hemiLight = new THREE.HemisphereLight("#e0f2fe", "#4a5568", 0.42);
     this.scene.add(hemiLight);
 
-    this.dirLight = new THREE.DirectionalLight("#fffbeb", 1.85);
+    this.dirLight = new THREE.DirectionalLight("#fffbeb", 2.35);
     this.dirLight.position.set(60, 120, 80);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 1024;

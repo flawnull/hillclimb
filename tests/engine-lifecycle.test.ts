@@ -59,10 +59,15 @@ describe("Engine Lifecycle & State Machine", () => {
       engine.timer.start();
       engine.input.setTouchAxes({ steer: 0.2, throttle: 1.0, brake: 0, handbrake: false });
 
-      let elapsed = 0;
-      while (elapsed < totalSimTimeSec) {
+      // Drive an exact number of frames rather than accumulating a float clock. The previous
+      // `while (elapsed < totalSimTimeSec)` form ran 241, 481 and 121 frames for 1/60, 1/120
+      // and 1/30 — that is 241, 240 and 242 physics substeps, so the three runs never
+      // simulated the same amount of time and this test was comparing unequal work. It
+      // passed only because the handling was soft enough that one substep of divergence
+      // stayed under the tolerance.
+      const frames = Math.round(totalSimTimeSec / deltaSec);
+      for (let i = 0; i < frames; i++) {
         engine.update(deltaSec);
-        elapsed += deltaSec;
       }
       return engine.vehicle.state;
     };
@@ -72,21 +77,25 @@ describe("Engine Lifecycle & State Machine", () => {
     const state120 = runEngineWithDelta(1 / 120, simTime);
     const state30 = runEngineWithDelta(1 / 30, simTime);
 
-    // Positions and speed must match across different display refresh rates (fixed-step accumulator)
+    // Positions and speed must match across different display refresh rates (fixed-step
+    // accumulator). With each run driving an equal number of substeps these come out
+    // BIT-IDENTICAL, so the bounds below are tight enough to actually catch a regression.
+    // The previous 0.05 m / 0.1 m tolerances were a thousand times looser than the real
+    // behaviour and masked the unequal-work bug in the loop above.
     assert.ok(
-      Math.abs(state60.pos.x - state120.pos.x) < 0.05,
+      Math.abs(state60.pos.x - state120.pos.x) < 1e-9,
       `X mismatch 60Hz vs 120Hz: ${state60.pos.x.toFixed(4)} vs ${state120.pos.x.toFixed(4)}`
     );
     assert.ok(
-      Math.abs(state60.pos.z - state120.pos.z) < 0.05,
+      Math.abs(state60.pos.z - state120.pos.z) < 1e-9,
       `Z mismatch 60Hz vs 120Hz: ${state60.pos.z.toFixed(4)} vs ${state120.pos.z.toFixed(4)}`
     );
     assert.ok(
-      Math.abs(state60.speedMs - state120.speedMs) < 0.05,
+      Math.abs(state60.speedMs - state120.speedMs) < 1e-9,
       `Speed mismatch 60Hz vs 120Hz: ${state60.speedMs.toFixed(4)} vs ${state120.speedMs.toFixed(4)}`
     );
     assert.ok(
-      Math.abs(state60.pos.z - state30.pos.z) < 0.1,
+      Math.abs(state60.pos.z - state30.pos.z) < 1e-9,
       `Z mismatch 60Hz vs 30Hz: ${state60.pos.z.toFixed(4)} vs ${state30.pos.z.toFixed(4)}`
     );
   });

@@ -39,6 +39,48 @@ const MIN_LEAF = 4;
 const MAX_LEAF = 256;
 const GRADE = 0.30;
 
+/**
+ * Procedural micro-detail bump map, generated once and shared by every stage.
+ *
+ * Guarded for headless use: the test suite builds terrain under `node:test`, where there is
+ * no `document`. Without a canvas the material simply goes without the detail map, which
+ * only affects tests.
+ */
+let cachedDetailTexture: THREE.Texture | null = null;
+function getTerrainDetailTexture(): THREE.Texture | undefined {
+  if (typeof document === "undefined") return undefined;
+  if (cachedDetailTexture) return cachedDetailTexture;
+
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return undefined;
+
+  const image = ctx.createImageData(size, size);
+  const data = image.data;
+  for (let i = 0; i < size * size; i++) {
+    // Uncorrelated per-texel noise around mid-grey: pure high-frequency grain, no visible
+    // banding or stripes at any viewing distance.
+    const v = 128 + (Math.random() - 0.5) * 44;
+    const o = i * 4;
+    data[o] = v;
+    data[o + 1] = v;
+    data[o + 2] = v;
+    data[o + 3] = 255;
+  }
+  ctx.putImageData(image, 0, 0);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+  texture.colorSpace = THREE.LinearSRGBColorSpace;
+  cachedDetailTexture = texture;
+  return texture;
+}
+
 export function leafSizeAt(distToRoute: number): number {
   const d = distToRoute < 0 ? 0 : distToRoute;
   const target = MIN_LEAF + GRADE * d;
@@ -104,6 +146,7 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
 
   const positions: number[] = [];
   const colors: number[] = [];
+  const uvs: number[] = [];
   const indices: number[] = [];
   const vertexIds = new Map<string, number>();
   // Explicit skirt tag, one entry per vertex: 0 for a real surface vertex, 1 for a skirt
@@ -138,7 +181,18 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
     const { height: y, color: c } = field.sampleAt(x, z);
     const id = positions.length / 3;
     positions.push(x, y, z);
-    colors.push(c.r, c.g, c.b);
+
+    // World-planar UVs. The detail bump map below needs somewhere to map to, and tying UVs
+    // to world position rather than to cell indices keeps the grain continuous across the
+    // LOD boundaries where cell size changes.
+    uvs.push(x * 0.5, z * 0.5);
+
+    // Deterministic per-vertex colour jitter, carried over from the original terrain. A
+    // smooth vertex-colour gradient over large flat-shaded facets reads as plastic; a small
+    // amount of break-up is most of what makes it read as ground. Derived from position so
+    // it is stable across rebuilds rather than random.
+    const jitter = ((Math.abs(Math.round(x * 7 + z * 13)) % 17) / 17 - 0.5) * 0.05;
+    colors.push(c.r + jitter, c.g + jitter, c.b + jitter);
     isSkirt.push(0);
     vertexIds.set(key, id);
     return id;
@@ -261,11 +315,13 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
 
       const b0 = positions.length / 3;
       positions.push(x0, y0 - depth, z0);
+      uvs.push(x0 * 0.5, z0 * 0.5);
       colors.push(c0r, c0g, c0b);
       isSkirt.push(1);
       skirtBottomToTop.set(b0, t0);
       const b1 = positions.length / 3;
       positions.push(x1, y1 - depth, z1);
+      uvs.push(x1 * 0.5, z1 * 0.5);
       colors.push(c1r, c1g, c1b);
       isSkirt.push(1);
       skirtBottomToTop.set(b1, t1);
@@ -295,6 +351,7 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
   // 1 for a skirt-apron vertex, 0 for a real surface vertex. Consumers that need to tell
   // ground from skirt (e.g. a raycast coverage check) should treat a triangle as a skirt
   // triangle when ANY of its three vertices is flagged, not when all three are: a skirt
@@ -331,6 +388,11 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
 
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
+    // High-frequency micro-detail. The original terrain carried this and the unified-field
+    // rewrite dropped it, which is why the ground read as flat plastic: large smooth facets
+    // with nothing breaking up the shading across them. Procedural, so it costs no download.
+    bumpMap: getTerrainDetailTexture(),
+    bumpScale: 0.75,
     roughness: 0.92,
     metalness: 0.02,
     flatShading: false,

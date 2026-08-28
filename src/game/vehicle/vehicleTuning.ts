@@ -41,8 +41,14 @@
  *   Edge re-simulation, and native trig is not bit-identical across V8, JavaScriptCore and
  *   Hermes, so a run recorded on one engine could fail to reproduce on another. Control point
  *   positions shift by a hair as a result, which is a stage-geometry change in its own right.
+ *
+ * 6 -> 7: handling rework. The car understeered into a slide at any real cornering load and
+ *   keyboard steering took 0.31 s to reach full lock while losing 65% of its authority by
+ *   144 km/h — sim conventions that assume an analog wheel. Cornering stiffness, yaw response,
+ *   the digital steering ramp, the return rate and the high-speed steering floor all changed,
+ *   so lap times under the new handling are not comparable to the old ones.
  */
-export const SIM_VERSION = 6;
+export const SIM_VERSION = 7;
 
 /*
  * Version history — append a line whenever this is bumped.
@@ -79,7 +85,11 @@ export const ROLL_RESIST = 14.0;
 export const GRADE_SCALE = 1.0;
 
 /** Lateral cornering stiffness (rad^-1) for linear slip angle regime */
-export const CORNER_STIFFNESS = 18.0;
+// Raised from 18.0. The car washed out under cornering load rather than biting, so every
+// corner became a drift whether or not you wanted one. More lateral stiffness means the
+// front end takes a set and holds it; the handbrake and throttle still break traction
+// deliberately, which is where sliding belongs.
+export const CORNER_STIFFNESS = 23.0;
 
 /** Downforce coefficient k (downforce = 1 + k * v^2) */
 export const DOWNFORCE_K = 0.00015;
@@ -88,19 +98,29 @@ export const DOWNFORCE_K = 0.00015;
 export const MAX_DOWNFORCE_BOOST = 0.25;
 
 /** Yaw response blend rate (higher = snappier direction change) */
-export const YAW_RESPONSE = 9.5;
+// Raised from 9.5. Governs how quickly yaw rate converges on the kinematic target; too low
+// and the car rotates lazily behind your input, which reads as floaty on a keyboard.
+export const YAW_RESPONSE = 12.5;
 
 /** Speed in m/s (approx 144 km/h) at which steering angle lerps down to MIN_STEER_RATIO */
 export const STEER_SPEED_SENSITIVITY = 40.0;
 
 /** Minimum steering angle ratio at high speed for stability */
-export const MIN_STEER_RATIO = 0.35;
+// Raised from 0.35. Speed-sensitive steering is a sim convention that assumes an analog
+// wheel: with a keyboard you have no fine control to compensate with, so cutting lock to 35%
+// just makes the car feel unresponsive. At 100 km/h the old value left only 55% of lock
+// available. 0.60 keeps high-speed stability without the vagueness.
+export const MIN_STEER_RATIO = 0.60;
 
 /** Steering ramp rate in radians per second for digital input (keyboard/buttons) */
-export const DIGITAL_STEER_RAMP = 3.2;
+// Raised from 3.2 rad/s, which took 0.31 s to reach full lock — a third of a second of the
+// car ignoring you after a key press. This game is played on a keyboard most of the time, so
+// input has to commit quickly; 6.5 reaches full lock in about 0.15 s.
+export const DIGITAL_STEER_RAMP = 6.5;
 
 /** Steering auto-center return rate in radians per second */
-export const STEER_RETURN_RATE = 5.0;
+// Raised alongside the ramp so the car straightens as promptly as it turns in.
+export const STEER_RETURN_RATE = 7.5;
 
 /** Throttle / Brake digital ramp rate (0 to 1 in 0.1s) */
 export const PEDAL_RAMP_RATE = 10.0;
