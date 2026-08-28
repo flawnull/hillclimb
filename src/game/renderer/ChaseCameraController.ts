@@ -12,6 +12,13 @@ export class ChaseCameraController {
   private camLookAt: THREE.Vector3 = new THREE.Vector3();
   private camInitialised: boolean = false;
 
+  // Haze endpoints, allocated once. `fogLow` matches the renderer's own background/fog
+  // colour so valley air agrees with the scene setup; `fogHigh` is the same hue lifted and
+  // desaturated slightly for thinner air at altitude.
+  private readonly fogLow = new THREE.Color("#7891a8");
+  private readonly fogHigh = new THREE.Color("#9fb3c8");
+  private readonly fogScratch = new THREE.Color();
+
   public reset(): void {
     this.camInitialised = false;
   }
@@ -71,11 +78,20 @@ export class ChaseCameraController {
     dirLight.target.updateMatrixWorld();
 
     // 4. Dynamic Sky / Fog tone based on altitude
+    //
+    // Two bugs lived here. The colours were the pre-unified-terrain palette, so this
+    // overwrote the horizon colour the renderer sets up every single frame — the fog tuning
+    // that makes distant ridges fade into haze was being undone as fast as it was applied.
+    // The endpoints are now derived from that colour instead of hardcoded against it.
+    //
+    // And both Colors were allocated fresh on every frame, on the hottest path in the app:
+    // two garbage objects per frame, ~120/second, purely to interpolate between two
+    // constants. They are hoisted to instance fields and lerped into a scratch colour.
     const altNorm = Math.max(0, Math.min(1, (s.altitude - 500) / 1100));
-    const fogColor = new THREE.Color("#cbd5e1").lerp(new THREE.Color("#94a3b8"), altNorm);
+    this.fogScratch.lerpColors(this.fogLow, this.fogHigh, altNorm);
     if (scene.fog) {
-      (scene.fog as THREE.FogExp2).color.copy(fogColor);
-      (scene.background as THREE.Color).copy(fogColor);
+      (scene.fog as THREE.FogExp2).color.copy(this.fogScratch);
+      (scene.background as THREE.Color).copy(this.fogScratch);
     }
   }
 }

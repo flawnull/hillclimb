@@ -21,6 +21,15 @@ import { EffectsManager } from "./EffectsManager";
 // generation bug. 6000 m comfortably covers the padded field with headroom to spare.
 const CAMERA_FAR = 6000;
 
+// Hoisted so the render loop never parses a colour string. `Color.set("#rrggbb")` runs a
+// full hex parse on every call, and these were previously assigned once per light per frame.
+const BRAKE_LIGHT_ON = new THREE.Color("#ff0000");
+const BRAKE_LIGHT_OFF = new THREE.Color("#7f1d1d");
+const BRAKE_EMISSIVE_ON = new THREE.Color("#ff1a1a");
+const BRAKE_EMISSIVE_OFF = new THREE.Color("#450a0a");
+const DISC_HOT = new THREE.Color("#ea580c");
+const DISC_COLD = new THREE.Color("#475569");
+
 /**
  * Disposes every material under `root`, along with the textures those materials own.
  *
@@ -78,6 +87,11 @@ export class GameRenderer {
   private lowFpsTimer = 0;
   private highFpsTimer = 0;
   private currentDprScale = 1.0;
+
+  // Latched light states, so the render loop only writes materials on an actual change.
+  private lastBrakingState: boolean | null = null;
+  private lastReversingState: boolean | null = null;
+  private lastHeavyBrakeState: boolean | null = null;
 
   // Checkpoint respawn tracking, see the render loop's cameraController.reset() call.
   private lastSeenRespawnCount = 0;
@@ -367,35 +381,53 @@ export class GameRenderer {
         }
 
         // 5. Dynamic Brake Lights
+        //
+        // Only touched when the state actually changes. This used to run every frame, and
+        // `Color.set("#ff0000")` PARSES THE STRING each time — a hex parse per light per
+        // frame, plus a uniform rewrite, to assign a value that is identical to the one
+        // already there for all but a couple of frames per braking event. The colours are
+        // hoisted to module constants so nothing is parsed at runtime at all.
         const isBraking = s.brake > 0.1 || s.handbrake;
-        for (const light of this.carMeshResult.brakeLightMeshes) {
-          const mat = light.material as THREE.MeshStandardMaterial;
-          if (mat) {
-            mat.color.set(isBraking ? "#ff0000" : "#7f1d1d");
-            mat.emissive.set(isBraking ? "#ff1a1a" : "#450a0a");
-            mat.emissiveIntensity = isBraking ? 3.0 : 0.6;
+        if (isBraking !== this.lastBrakingState) {
+          this.lastBrakingState = isBraking;
+          for (const light of this.carMeshResult.brakeLightMeshes) {
+            const mat = light.material as THREE.MeshStandardMaterial;
+            if (mat) {
+              mat.color.copy(isBraking ? BRAKE_LIGHT_ON : BRAKE_LIGHT_OFF);
+              mat.emissive.copy(isBraking ? BRAKE_EMISSIVE_ON : BRAKE_EMISSIVE_OFF);
+              mat.emissiveIntensity = isBraking ? 3.0 : 0.6;
+            }
           }
         }
 
         // 5b. Active Reversing Lights (White LEDs)
         const isReversing = (s.brake > 0.5 && s.speedMs < 0.2) || s.gear === 0;
-        for (const rev of this.carMeshResult.reverseLightMeshes) {
-          const mat = rev.material as THREE.MeshStandardMaterial;
-          if (mat) {
-            mat.emissiveIntensity = isReversing ? 2.5 : 0.0;
+        if (isReversing !== this.lastReversingState) {
+          this.lastReversingState = isReversing;
+          for (const rev of this.carMeshResult.reverseLightMeshes) {
+            const mat = rev.material as THREE.MeshStandardMaterial;
+            if (mat) {
+              mat.emissiveIntensity = isReversing ? 2.5 : 0.0;
+            }
           }
         }
 
         // 5c. Brake Disc Glow
         const isHeavyBrake = s.brake > 0.35 || s.handbrake;
-        for (const disc of this.carMeshResult.brakeDiscs) {
-          (disc.material as THREE.MeshBasicMaterial).color.set(isHeavyBrake ? "#ea580c" : "#475569");
+        if (isHeavyBrake !== this.lastHeavyBrakeState) {
+          this.lastHeavyBrakeState = isHeavyBrake;
+          for (const disc of this.carMeshResult.brakeDiscs) {
+            (disc.material as THREE.MeshBasicMaterial).color.copy(isHeavyBrake ? DISC_HOT : DISC_COLD);
+          }
         }
 
         // 5d. Exhaust Backfire Pop
         if (this.carMeshResult.exhaustFlame) {
           const isBackfire = s.throttle < 0.1 && s.rpm > 5000 && Math.random() < 0.35;
-          (this.carMeshResult.exhaustFlame.material as THREE.MeshBasicMaterial).opacity = isBackfire ? 0.9 : 0.0;
+          const flameMat = this.carMeshResult.exhaustFlame.material as THREE.MeshBasicMaterial;
+          if (flameMat.opacity !== (isBackfire ? 0.9 : 0.0)) {
+            flameMat.opacity = isBackfire ? 0.9 : 0.0;
+          }
         }
 
         // 6. Perk Aura Glow

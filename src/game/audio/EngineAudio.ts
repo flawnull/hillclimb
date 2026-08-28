@@ -24,6 +24,7 @@ export class EngineAudio {
   // Tire squeal synthesis
   private squealOsc: OscillatorNode | null = null;
   private squealGain: GainNode | null = null;
+  private gritGain: GainNode | null = null;
 
   // Wind rush noise synthesis
   private windFilter: BiquadFilterNode | null = null;
@@ -53,12 +54,20 @@ export class EngineAudio {
       this.osc2 = this.ctx.createOscillator();
       this.subOsc = this.ctx.createOscillator();
 
-      this.osc1.type = "triangle"; // Smooth fundamental body
-      this.osc2.type = "sawtooth"; // Mechanical growl
-      this.subOsc.type = "sine";   // Sub-bass exhaust rumble
+      // A triangle fundamental with a pure sine sub is what made this read as a synthesizer
+      // rather than an engine: smooth, harmonically sparse waveforms sliding continuously in
+      // pitch are the theremin/sci-fi gesture. A real engine is a pulse train — a sharp
+      // repeating combustion impulse, rich in harmonics — so both are sawtooths here, with
+      // the sub kept as a square for body without mud.
+      this.osc1.type = "sawtooth"; // Firing pulse train
+      this.osc2.type = "sawtooth"; // Mechanical growl an octave up
+      this.subOsc.type = "square"; // Exhaust body
 
-      this.osc1.detune.value = 0;
-      this.osc2.detune.value = 7;
+      // Wider detune between the two saws. Two oscillators at nearly the same frequency beat
+      // against each other, and that slow wobble is a large part of why an engine sounds
+      // mechanical and slightly uneven rather than electronically pure.
+      this.osc1.detune.value = -9;
+      this.osc2.detune.value = 14;
       this.subOsc.detune.value = -1200; // 1 octave lower
 
       // Main Throaty Exhaust Filter
@@ -87,6 +96,39 @@ export class EngineAudio {
       this.osc1.start();
       this.osc2.start();
       this.subOsc.start();
+
+      // 1b. Combustion grit.
+      //
+      // Oscillators alone stay too clean to read as an engine at any pitch. Real combustion
+      // is broadband noise bursting through the exhaust, and its absence is most of what made
+      // this sound synthetic. A low-passed noise bed rides the same exhaust filter as the
+      // oscillators, with its level driven by throttle and RPM in update().
+      const gritBufferSize = 2 * this.ctx.sampleRate;
+      const gritBuffer = this.ctx.createBuffer(1, gritBufferSize, this.ctx.sampleRate);
+      const gritData = gritBuffer.getChannelData(0);
+      let gritLast = 0;
+      for (let i = 0; i < gritBufferSize; i++) {
+        const white = Math.random() * 2 - 1;
+        // Brown-ish noise: heavily weighted to low frequencies, like exhaust rumble.
+        gritLast = (gritLast + 0.045 * white) / 1.045;
+        gritData[i] = gritLast * 3.2;
+      }
+      const gritSource = this.ctx.createBufferSource();
+      gritSource.buffer = gritBuffer;
+      gritSource.loop = true;
+
+      const gritFilter = this.ctx.createBiquadFilter();
+      gritFilter.type = "lowpass";
+      gritFilter.frequency.value = 700;
+      gritFilter.Q.value = 0.8;
+
+      this.gritGain = this.ctx.createGain();
+      this.gritGain.gain.value = 0.0;
+
+      gritSource.connect(gritFilter);
+      gritFilter.connect(this.gritGain);
+      this.gritGain.connect(this.engineGain);
+      gritSource.start();
 
       // 2. Tire Scrub & Slide Synthesis (Smooth bandpass noise)
       const tireBufferSize = 2 * this.ctx.sampleRate;
@@ -190,6 +232,14 @@ export class EngineAudio {
       // Engine volume slightly louder on throttle
       const targetVol = 0.22 + throttle * 0.14 + rpmNorm * 0.10;
       this.engineGain.gain.setTargetAtTime(targetVol, now, 0.04);
+
+      // Combustion grit tracks load: barely there at idle, prominent under power. Ramped
+      // faster than the volume so the roughness arrives with the throttle rather than
+      // swelling in behind it.
+      if (this.gritGain) {
+        const gritTarget = 0.05 + throttle * 0.30 + rpmNorm * 0.14;
+        this.gritGain.gain.setTargetAtTime(gritTarget, now, 0.03);
+      }
     }
 
     // Smooth Tire Scrub / Squeal
@@ -216,9 +266,11 @@ export class EngineAudio {
       // Transmission mechanical clunk
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(isUpshift ? 220 : 160, now);
-      osc.frequency.exponentialRampToValueAtTime(40, now + 0.08);
+      // Same problem as the backfire: a triangle gliding 220 Hz down to 40 Hz is a sci-fi
+      // sweep, not a gearbox. A shift is a mechanical clunk — a brief, fixed-pitch knock
+      // with a fast decay, pitched a little lower on a downshift.
+      osc.type = "square";
+      osc.frequency.setValueAtTime(isUpshift ? 96 : 76, now);
 
       gain.gain.setValueAtTime(0.3, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
@@ -260,15 +312,46 @@ export class EngineAudio {
     if (!this.ctx || this.isMuted) return;
     try {
       const now = this.ctx.currentTime;
+      // A backfire is an explosion, not a note. The previous version swept a sawtooth from
+      // 180 Hz down to 30 Hz — a descending pure-tone glide, which is precisely the
+      // synthesised laser-zap gesture and the main reason this read as a space game.
+      //
+      // What a real pop is: a broadband crack with an almost instantaneous attack, plus a
+      // low thump you feel more than hear. Built here as a short burst of filtered noise
+      // over a fast-decaying low sine, with no pitch movement at all.
+      const crackLen = Math.floor(this.ctx.sampleRate * 0.09);
+      const crackBuffer = this.ctx.createBuffer(1, crackLen, this.ctx.sampleRate);
+      const crackData = crackBuffer.getChannelData(0);
+      for (let i = 0; i < crackLen; i++) {
+        // Sharp exponential decay: all the energy in the first few milliseconds.
+        crackData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (this.ctx.sampleRate * 0.012));
+      }
+      const crack = this.ctx.createBufferSource();
+      crack.buffer = crackBuffer;
+
+      const crackFilter = this.ctx.createBiquadFilter();
+      crackFilter.type = "bandpass";
+      crackFilter.frequency.value = 900;
+      crackFilter.Q.value = 0.9;
+
+      const crackGain = this.ctx.createGain();
+      crackGain.gain.setValueAtTime(0.42, now);
+      crackGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+      crack.connect(crackFilter);
+      crackFilter.connect(crackGain);
+      crackGain.connect(this.masterGain || this.ctx.destination);
+      crack.start(now);
+
+      // The thump underneath. Fixed pitch — a swept one would bring the zap straight back.
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.exponentialRampToValueAtTime(30, now + 0.07);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(72, now);
 
-      gain.gain.setValueAtTime(0.35, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      gain.gain.setValueAtTime(0.30, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
 
       osc.connect(gain);
       gain.connect(this.masterGain || this.ctx.destination);
