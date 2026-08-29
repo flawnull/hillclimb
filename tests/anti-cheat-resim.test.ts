@@ -55,7 +55,9 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
       const angleDiff = detNormalizeAngle(targetHeading - s.heading);
 
       const latCorrection = -proj.t * 0.15;
-      const steer = Math.max(-1.0, Math.min(1.0, angleDiff * 3.8 + latCorrection));
+      // Negated for the same reason as the completion test below: the model flips the
+      // incoming steer axis, so a controller working in its heading convention must invert.
+      const steer = Math.max(-1.0, Math.min(1.0, -(angleDiff * 3.8 + latCorrection)));
 
       const curvature = Math.abs(angleDiff) / lookaheadDist;
       let targetSpeedKmh = 140;
@@ -762,7 +764,9 @@ describe("A completed run validates end to end", () => {
       const lookahead = Math.max(8, Math.min(22, s.speedMs * 0.7));
       const target = spline.getSampleAtS(Math.min(spline.totalLength - 0.5, proj.s + lookahead));
       const angleDiff = detNormalizeAngle(detAtan2(target.x - s.pos.x, target.z - s.pos.z) - s.heading);
-      const steer = Math.max(-1, Math.min(1, angleDiff * 3.8 - proj.t * 0.35));
+      // Negated: the model now flips the incoming steer axis (-1 = left, +1 = right), so a
+      // controller working in the model's own heading convention has to invert to match.
+      const steer = Math.max(-1, Math.min(1, -(angleDiff * 3.8 - proj.t * 0.35)));
 
       const curvature = Math.abs(angleDiff) / lookahead;
       let targetKmh = SPEED_CAP_KMH;

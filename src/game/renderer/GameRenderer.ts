@@ -190,6 +190,14 @@ export class GameRenderer {
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 1024;
     this.dirLight.shadow.mapSize.height = 1024;
+    // Depth bias. Without it the terrain self-shadows: a 1024 map stretched over a 120 m
+    // shadow camera gives texels several centimetres across, so sloped ground samples its own
+    // depth and renders thin dark streaks following the contours — which read as cracks or
+    // see-through seams in the hillside rather than as a lighting artifact. Raising the sun
+    // intensity made them more obvious. normalBias offsets along the surface normal, which is
+    // what large sloped meshes need; the small negative constant bias handles the rest.
+    this.dirLight.shadow.bias = -0.0006;
+    this.dirLight.shadow.normalBias = 0.8;
     this.dirLight.shadow.camera.near = 1;
     this.dirLight.shadow.camera.far = 350;
     this.dirLight.shadow.camera.left = -60;

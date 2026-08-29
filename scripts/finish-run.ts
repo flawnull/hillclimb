@@ -83,7 +83,7 @@ async function main(): Promise<void> {
             while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
             while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
-            const steer = Math.max(-1, Math.min(1, angleDiff * 3.8 - proj.t * 0.35));
+            const steer = Math.max(-1, Math.min(1, -(angleDiff * 3.8 - proj.t * 0.35)));
             const curvature = Math.abs(angleDiff) / lookahead;
             let targetKmh = SPEED_CAP_KMH;
             if (curvature > 0.04) targetKmh = 32;

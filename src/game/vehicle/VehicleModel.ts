@@ -192,12 +192,30 @@ export class VehicleModel {
     const car = this.car;
 
     // 1. Smooth input axes
-    if (input.steer !== 0) {
+    //
+    // The steering command is NEGATED relative to the input axis. The input layer follows the
+    // usual convention (-1 = left, +1 = right), but this model's heading convention is the
+    // other way round: forward is (sin h, cos h), so an increasing heading rotates the car
+    // toward +X, and with the chase camera behind the car +X is screen-LEFT. Feeding the axis
+    // straight in therefore steered the car opposite to the key pressed.
+    //
+    // This was reported repeatedly and I twice "verified" it as correct using bad method:
+    // the spline's `t` value, whose documented sign convention turned out not to be
+    // dependable, and a camera-relative measurement taken AFTER the chase camera had already
+    // rotated with the car — which is self-referential and always looks right. The honest
+    // test is displacement against the camera basis sampled BEFORE the input, which showed
+    // A moving the car +0.50 to screen-right and D moving it -0.49 to screen-left.
+    //
+    // Negating here rather than deeper keeps the road-tangent steering assist correct: that
+    // works in this model's own heading convention and is added downstream, so it must not
+    // be flipped.
+    const steerCommand = -input.steer;
+    if (steerCommand !== 0) {
       const step = DIGITAL_STEER_RAMP * dt;
-      if (input.steer > s.steer) {
-        s.steer = Math.min(input.steer, s.steer + step);
+      if (steerCommand > s.steer) {
+        s.steer = Math.min(steerCommand, s.steer + step);
       } else {
-        s.steer = Math.max(input.steer, s.steer - step);
+        s.steer = Math.max(steerCommand, s.steer - step);
       }
     } else {
       // Auto-center

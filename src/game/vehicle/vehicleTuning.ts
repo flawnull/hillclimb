@@ -54,8 +54,16 @@
  *   brake — reaching 30 km/h backwards, at which point steering looks inverted on screen.
  *   Reverse must now be selected (stop, release the brake, hold it again), any throttle
  *   cancels it, and reverse speed is capped at REVERSE_MAX_SPEED.
+ *
+ * 8 -> 9: steering was inverted on screen. The input layer uses -1 = left / +1 = right, but
+ *   this model's heading convention rotates the car toward +X as heading increases, and with
+ *   the chase camera behind the car +X is screen-LEFT. The command is now negated where the
+ *   axis enters the model. Reported repeatedly and twice mis-verified: the spline `t` sign
+ *   convention is not dependable, and measuring against the chase camera AFTER it has rotated
+ *   with the car is self-referential. Measured against the camera basis sampled BEFORE the
+ *   input, A moved the car +0.50 to screen-right; it now moves -0.45 to screen-left.
  */
-export const SIM_VERSION = 8;
+export const SIM_VERSION = 9;
 
 /*
  * Version history — append a line whenever this is bumped.
