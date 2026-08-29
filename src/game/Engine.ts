@@ -126,7 +126,18 @@ export class Engine {
 
   public setSpline(spline: TrackSpline, pb?: PersonalBest): void {
     this.spline = spline;
-    this.hairpinSValues = spline.getAllSamples().filter((s) => s.isHairpinApex).map((s) => s.s);
+    // Collapse each hairpin's flagged samples into ONE entry.
+    //
+    // The spline samples every 2 m and carries `isHairpinApex` across every sample spanning a
+    // flagged control point, so a 38-hairpin stage produced 380 flagged samples. The counter
+    // below counts entries passed, so it read up to 380 against a declared total of 38 —
+    // hence displays like "50 / 38" after only a handful of corners. Consecutive flagged
+    // samples closer together than this gap belong to the same corner.
+    const APEX_GROUP_GAP_M = 40;
+    const flagged = spline.getAllSamples().filter((s) => s.isHairpinApex).map((s) => s.s);
+    this.hairpinSValues = flagged.filter(
+      (sVal, i) => i === 0 || sVal - flagged[i - 1] > APEX_GROUP_GAP_M
+    );
     this.timer.setCheckpoints(spline.stage.checkpoints, pb);
     this.resetToStart();
   }

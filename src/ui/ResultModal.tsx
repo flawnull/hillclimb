@@ -280,7 +280,22 @@ export const ResultModal: React.FC<ResultModalProps> = ({
           )}
 
           {submitError && (
-            <div className="text-[10px] text-rose-400 mt-1">{submitError}</div>
+            <div className="mt-1">
+              <div className="text-[10px] text-rose-400">{submitError}</div>
+              {/* A simulation-version mismatch means this tab was loaded before the game was
+                  updated: the run was recorded under the previous physics, so the server
+                  cannot verify it and correctly refuses to rank it. Nothing is wrong with the
+                  run or the connection, and no amount of retrying will help — the page simply
+                  has to be reloaded. Without saying so, this reads as "submitting is broken". */}
+              {/version mismatch/i.test(submitError) && (
+                <button
+                  onClick={() => window.location.reload()}
+                  className="mt-2 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-bold tracking-wide uppercase transition-colors"
+                >
+                  Reload to get the current version
+                </button>
+              )}
+            </div>
           )}
         </div>
 
