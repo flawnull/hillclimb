@@ -533,6 +533,73 @@ export class CarMeshBuilder {
       chassisGroup.add(ducktail);
     }
 
+    // Motorsport livery for the Weiss-Blau coupe.
+    //
+    // The car is already a period Bavarian homage — "Weiss-Blau" is white-and-blue, and the
+    // colourways carry real paint names of the era (Chamonix White, Inka Orange, Nachtblau).
+    // What it lacked was the thing that actually makes the reference read at a glance: the
+    // tricolour flank stripes and a quartered roundel.
+    //
+    // Deliberately an homage rather than a reproduction: the stripe order and the roundel's
+    // quartering evoke the works cars without copying a real manufacturer's trademarked
+    // emblem, which this project has no licence to use.
+    if (car.id === "weiss-blau-30") {
+      const liveryGroup = new THREE.Group();
+
+      // Tricolour: light blue, dark blue, red — the classic motorsport banding.
+      const stripeColors = ["#3aa0dc", "#12256b", "#d42026"];
+      const stripeW = 0.075;
+      const halfBody = 0.86;
+
+      for (const side of [-1, 1]) {
+        stripeColors.forEach((hex, i) => {
+          const stripe = new THREE.Mesh(
+            new THREE.BoxGeometry(0.012, stripeW, 1.95),
+            new THREE.MeshStandardMaterial({ color: hex, roughness: 0.42, metalness: 0.05 })
+          );
+          // Stacked band running along the flank, just below the window line.
+          stripe.position.set(side * halfBody, 0.27 + i * (stripeW + 0.010), 0.02);
+          liveryGroup.add(stripe);
+        });
+      }
+
+      // A shorter run of the same banding across the nose.
+      stripeColors.forEach((hex, i) => {
+        const nose = new THREE.Mesh(
+          new THREE.BoxGeometry(0.52, 0.012, stripeW),
+          new THREE.MeshStandardMaterial({ color: hex, roughness: 0.42, metalness: 0.05 })
+        );
+        nose.position.set(-0.30 + i * (stripeW + 0.012), 0.545, frontZ - 0.18);
+        liveryGroup.add(nose);
+      });
+
+      // Quartered roundel on the bonnet: white outer ring, then alternating blue and white
+      // quadrants. Built from wedges rather than a texture so it needs no image asset.
+      const roundelY = 0.556;
+      const roundelZ = frontZ - 0.62;
+      const ring = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.155, 0.155, 0.014, 28),
+        new THREE.MeshStandardMaterial({ color: "#101418", roughness: 0.5, metalness: 0.3 })
+      );
+      ring.position.set(0, roundelY, roundelZ);
+      liveryGroup.add(ring);
+
+      for (let q = 0; q < 4; q++) {
+        const wedge = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.125, 0.125, 0.016, 14, 1, false, (q * Math.PI) / 2, Math.PI / 2),
+          new THREE.MeshStandardMaterial({
+            color: q % 2 === 0 ? "#f4f7fa" : "#1e4fa3",
+            roughness: 0.45,
+            metalness: 0.05,
+          })
+        );
+        wedge.position.set(0, roundelY + 0.002, roundelZ);
+        liveryGroup.add(wedge);
+      }
+
+      chassisGroup.add(liveryGroup);
+    }
+
     // Ground Contact Shadow
     const shadowGeo = new THREE.PlaneGeometry(2.4, 4.6);
     const shadowMat = new THREE.MeshBasicMaterial({

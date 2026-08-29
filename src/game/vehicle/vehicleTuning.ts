@@ -62,8 +62,13 @@
  *   convention is not dependable, and measuring against the chase camera AFTER it has rotated
  *   with the car is self-referential. Measured against the camera basis sampled BEFORE the
  *   input, A moved the car +0.50 to screen-right; it now moves -0.45 to screen-left.
+ *
+ * 9 -> 10: steering stability. The previous pass over-corrected: full lock in 0.15 s with
+ *   almost no speed sensitivity meant every key press snapped to maximum steering and the car
+ *   darted rather than turning. Ramp eased to 0.24 s, yaw response reduced, and some
+ *   speed-sensitive falloff restored, so inputs build weight instead of switching.
  */
-export const SIM_VERSION = 9;
+export const SIM_VERSION = 10;
 
 /*
  * Version history — append a line whenever this is bumped.
@@ -115,7 +120,10 @@ export const MAX_DOWNFORCE_BOOST = 0.25;
 /** Yaw response blend rate (higher = snappier direction change) */
 // Raised from 9.5. Governs how quickly yaw rate converges on the kinematic target; too low
 // and the car rotates lazily behind your input, which reads as floaty on a keyboard.
-export const YAW_RESPONSE = 12.5;
+// Eased back from 12.5. Yaw was converging on the target so fast that the car changed
+// direction almost instantly on input, with none of the weight a car carries into a turn.
+// 10.5 keeps it responsive while letting the mass be felt.
+export const YAW_RESPONSE = 10.5;
 
 /** Speed in m/s (approx 144 km/h) at which steering angle lerps down to MIN_STEER_RATIO */
 export const STEER_SPEED_SENSITIVITY = 40.0;
@@ -125,17 +133,28 @@ export const STEER_SPEED_SENSITIVITY = 40.0;
 // wheel: with a keyboard you have no fine control to compensate with, so cutting lock to 35%
 // just makes the car feel unresponsive. At 100 km/h the old value left only 55% of lock
 // available. 0.60 keeps high-speed stability without the vagueness.
-export const MIN_STEER_RATIO = 0.60;
+// Some speed sensitivity restored. 0.60 kept nearly full lock available at any speed, which
+// is what made the car feel darty and nervous at pace — a small input at 120 km/h produced
+// as much steering angle as it would in a car park. 0.48 still leaves far more authority
+// than the original 0.35, without the twitchiness.
+export const MIN_STEER_RATIO = 0.48;
 
 /** Steering ramp rate in radians per second for digital input (keyboard/buttons) */
 // Raised from 3.2 rad/s, which took 0.31 s to reach full lock — a third of a second of the
 // car ignoring you after a key press. This game is played on a keyboard most of the time, so
 // input has to commit quickly; 6.5 reaches full lock in about 0.15 s.
-export const DIGITAL_STEER_RAMP = 6.5;
+// 6.5 was an over-correction. Reaching full lock in 0.15 s makes every tap of the key a
+// snap to maximum steering, so the car darts rather than turning: there is no range between
+// 'straight' and 'fully committed'. 4.2 reaches full lock in ~0.24 s, which still responds
+// promptly to a press but gives a usable band in between, so a short tap is a small
+// correction and a held key is a full turn.
+export const DIGITAL_STEER_RAMP = 4.2;
 
 /** Steering auto-center return rate in radians per second */
 // Raised alongside the ramp so the car straightens as promptly as it turns in.
-export const STEER_RETURN_RATE = 7.5;
+// Return stays a little quicker than the ramp so the car settles straight rather than
+// hunting, but not so fast that it snaps back the instant you release.
+export const STEER_RETURN_RATE = 6.0;
 
 /** Throttle / Brake digital ramp rate (0 to 1 in 0.1s) */
 export const PEDAL_RAMP_RATE = 10.0;

@@ -46,6 +46,76 @@ const GRADE = 0.30;
  * no `document`. Without a canvas the material simply goes without the detail map, which
  * only affects tests.
  */
+let cachedAlbedoTexture: THREE.Texture | null = null;
+
+/**
+ * Tiling ground albedo.
+ *
+ * The terrain had no texture at all — flat-shaded geometry with per-vertex colours. Every
+ * previous attempt to improve its look modulated TINT, which cannot produce surface detail,
+ * so it kept reading as coloured paper however the hue was adjusted. This is the actual
+ * surface: multi-scale mottling plus scattered speckle, drawn once procedurally.
+ *
+ * It is deliberately near-monochrome. `vertexColors` MULTIPLIES this map, so the vertex
+ * colours keep supplying the hue (chestnut green low, pasture and rock high, limestone in
+ * the valley) while this supplies the structure. Colouring the texture too would fight the
+ * altitude banding rather than support it.
+ */
+function getTerrainAlbedoTexture(): THREE.Texture | undefined {
+  if (typeof document === "undefined") return undefined;
+  if (cachedAlbedoTexture) return cachedAlbedoTexture;
+
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return undefined;
+
+  // Mid grey base: multiplying by 1.0 would leave the vertex colour untouched, so the base
+  // sits slightly above mid and the detail darkens from there.
+  ctx.fillStyle = "#b4b4b4";
+  ctx.fillRect(0, 0, size, size);
+
+  // Large soft blotches — the scale of grass patches and worn earth, several metres across.
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 18 + Math.random() * 52;
+    const dark = Math.random() < 0.55;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const a = 0.05 + Math.random() * 0.07;
+    grad.addColorStop(0, dark ? `rgba(70,70,70,${a})` : `rgba(232,232,232,${a})`);
+    grad.addColorStop(1, "rgba(128,128,128,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  // Fine speckle — stones, tussocks, scree. What actually reads as "ground" up close.
+  const image = ctx.getImageData(0, 0, size, size);
+  const data = image.data;
+  for (let i = 0; i < size * size; i++) {
+    const n = (Math.random() - 0.5) * 46;
+    const o = i * 4;
+    data[o] = Math.max(0, Math.min(255, data[o] + n));
+    data[o + 1] = Math.max(0, Math.min(255, data[o + 1] + n));
+    data[o + 2] = Math.max(0, Math.min(255, data[o + 2] + n));
+  }
+  ctx.putImageData(image, 0, 0);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 8;
+  // The mesh's UVs are world position * 0.5, i.e. one repeat every 2 m — right for the fine
+  // bump map, far too tight for this. At that scale the blotches below would be 7-20 cm
+  // across and read as noise rather than as patches of ground cover. `repeat` scales this
+  // texture's own lookup independently of the shared UVs: 1/6 gives one tile per ~12 m.
+  texture.repeat.set(1 / 6, 1 / 6);
+  cachedAlbedoTexture = texture;
+  return texture;
+}
+
 let cachedDetailTexture: THREE.Texture | null = null;
 function getTerrainDetailTexture(): THREE.Texture | undefined {
   if (typeof document === "undefined") return undefined;
@@ -391,6 +461,7 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
     // High-frequency micro-detail. The original terrain carried this and the unified-field
     // rewrite dropped it, which is why the ground read as flat plastic: large smooth facets
     // with nothing breaking up the shading across them. Procedural, so it costs no download.
+    map: getTerrainAlbedoTexture(),
     bumpMap: getTerrainDetailTexture(),
     bumpScale: 0.75,
     roughness: 0.92,
