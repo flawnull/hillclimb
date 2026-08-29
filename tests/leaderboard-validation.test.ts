@@ -68,7 +68,7 @@ describe("Leaderboard HMAC Tokens & Submission Security", () => {
   });
 
   it("all stages have valid gold, silver, bronze time hierarchies", () => {
-    for (const stageKey of ["borbera-sprint", "salita-cosola", "cresta-ebro"]) {
+    for (const stageKey of ["borbera-sprint", "salita-cosola"]) {
       const stage = getStageDef(stageKey);
       assert.ok(stage.goldTime > 0, `${stageKey}: gold time must be positive`);
       assert.ok(

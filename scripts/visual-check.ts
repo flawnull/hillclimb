@@ -30,8 +30,7 @@ interface StageMeta {
 
 const STAGES: StageMeta[] = [
   { id: "borbera-sprint", route: "Cabella <-> Rocchetta", name: "Borbera Sprint" },
-  { id: "salita-cosola", route: "Cabella -> Capanne di Cosola", name: "Salita di Cosola" },
-  { id: "cresta-ebro", route: "Monte Ebro Ridge Road", name: "Cresta Ebro" },
+  { id: "salita-cosola", route: "Cabella -> Cresta di Cosola", name: "Salita di Cosola" },
 ];
 
 interface Pose {

@@ -456,14 +456,17 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
 
   geometry.computeBoundingSphere();
 
+  const albedo = getTerrainAlbedoTexture();
+  const detail = getTerrainDetailTexture();
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     // High-frequency micro-detail. The original terrain carried this and the unified-field
     // rewrite dropped it, which is why the ground read as flat plastic: large smooth facets
     // with nothing breaking up the shading across them. Procedural, so it costs no download.
-    map: getTerrainAlbedoTexture(),
-    bumpMap: getTerrainDetailTexture(),
-    bumpScale: 0.75,
+    // Spread rather than assign: both are undefined under node:test (no `document`), and
+    // three.js warns for every explicitly-undefined material parameter.
+    ...(albedo ? { map: albedo } : {}),
+    ...(detail ? { bumpMap: detail, bumpScale: 0.75 } : {}),
     roughness: 0.92,
     metalness: 0.02,
     flatShading: false,

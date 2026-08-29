@@ -67,8 +67,15 @@
  *   almost no speed sensitivity meant every key press snapped to maximum steering and the car
  *   darted rather than turning. Ramp eased to 0.24 s, yaw response reduced, and some
  *   speed-sensitive falloff restored, so inputs build weight instead of switching.
+ *
+ * 10 -> 11: stage geometry. Salita di Cosola rewritten from 11.5 km / 38 hairpins to 5.6 km /
+ *   15, in three movements (wooded switchbacks, open traverse, exposed ridge) so the corners
+ *   stop repeating and a run takes minutes rather than nine of them. Cresta Ebro is removed
+ *   as a separate stage and its character — real altitude, ground falling away on both sides
+ *   — folded into the new ridge finale at drop depths that read as a mountain rather than the
+ *   1,300 m that made it look like a desert canyon.
  */
-export const SIM_VERSION = 10;
+export const SIM_VERSION = 11;
 
 /*
  * Version history — append a line whenever this is bumped.

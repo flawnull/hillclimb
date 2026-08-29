@@ -31,8 +31,7 @@ import { countRenderables } from "../src/game/track/batchStatics";
  *  Measured totals are 1287 / 1421 / 1246; ceilings keep ~15% headroom. */
 const MAX_MESHES: Record<string, number> = {
   "borbera-sprint": 1_500,
-  "salita-cosola": 1_650,
-  "cresta-ebro": 1_450,
+  "salita-cosola": 1_550,
 };
 
 /** Total triangles in a stage. Only a fraction is visible at once, but this bounds memory
@@ -49,8 +48,7 @@ const MAX_MESHES: Record<string, number> = {
 //  for scenery work.
 const MAX_TRIANGLES: Record<string, number> = {
   "borbera-sprint": 86_000,
-  "salita-cosola": 325_000,
-  "cresta-ebro": 94_000,
+  "salita-cosola": 160_000,
 };
 
 function buildStageScene(stageId: string) {

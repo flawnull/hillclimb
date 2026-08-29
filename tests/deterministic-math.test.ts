@@ -259,7 +259,6 @@ describe("Deterministic Math — source purity guard", () => {
       "../src/game/track/authoring/trackBuilder.ts",
       "../src/game/track/stages/borberaSprint.ts",
       "../src/game/track/stages/salitaCosola.ts",
-      "../src/game/track/stages/crestaEbro.ts",
       "../src/game/track/stages/index.ts",
     ];
     const forbidden = ["sin", "cos", "tan", "atan", "atan2", "pow", "exp", "log", "hypot", "cbrt", "fround", "random"];

@@ -113,8 +113,8 @@ describe("Roadway Clearance & Obstacle Safety", () => {
           }
         }
 
-        // borbera-sprint and salita-cosola have hairpins; cresta-ebro is a ridge road
-        if (entry.id !== "cresta-ebro") {
+        // Every remaining stage has hairpins.
+        {
           assert.ok(hairpinsChecked > 0, `${entry.id}: verified hairpins have guardrail protection`);
         }
       });

@@ -5,12 +5,10 @@
 import { StageDef } from "../TrackSpline";
 import { createBorberaSprintStage } from "./borberaSprint";
 import { createSalitaCosolaStage } from "./salitaCosola";
-import { createCrestaEbroStage } from "./crestaEbro";
 
 export const STAGES: Record<string, () => StageDef> = {
   'borbera-sprint': createBorberaSprintStage,
   'salita-cosola': createSalitaCosolaStage,
-  'cresta-ebro': createCrestaEbroStage,
 };
 
 /**
@@ -55,14 +53,8 @@ export const STAGE_LIST = [
   },
   {
     id: 'salita-cosola',
-    route: 'Cabella -> Capanne di Cosola',
-    character: 'The Main Event. Relentless hairpins, vertical drama.',
-    unlocked: true,
-  },
-  {
-    id: 'cresta-ebro',
-    route: 'Monte Ebro Ridge Road',
-    character: 'Knife-edge ridge, drops on both sides, blind crests.',
+    route: 'Cabella -> Cresta di Cosola',
+    character: 'Wooded switchbacks, open traverse, exposed ridge finale.',
     unlocked: true,
   },
 ].map((entry) => {

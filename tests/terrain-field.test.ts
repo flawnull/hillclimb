@@ -226,7 +226,7 @@ describe("baseAltitude", () => {
   });
 
   it("is deterministic", () => {
-    const spline = new TrackSpline(getStageDef("cresta-ebro"));
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
     const a = buildBaseAltitude(spline, 2500);
     const b = buildBaseAltitude(spline, 2500);
     const s = spline.getAllSamples()[100];
@@ -249,7 +249,7 @@ describe("valleyLayer", () => {
     assert.equal(valleyLandAt(1000, 400, VALLEY_SPAN * 5), 400, "distToRoute beyond VALLEY_SPAN should stay at floor");
   });
 
-  it("keeps ground far below the road on the far side of an exposed cresta-ebro section (the anti-moat assertion)", () => {
+  it("keeps ground far below the road on the far side of an exposed ridge section (the anti-moat assertion)", () => {
     // This is the whole point of the layer: before this fix, roadCarveLayer's fade toward
     // `land` had no notion of a floor below the road, so the ground plunged away from the
     // ribbon and was dragged straight back up to road-altitude land within ~90 m (measured:
@@ -259,7 +259,7 @@ describe("valleyLayer", () => {
     // road" at 400 m lateral would have FAILED against that pre-fix measurement (only ~35 m
     // below at less than half the distance, and above the road entirely by 1500 m) and
     // passes now that the floor grid gives the drop somewhere to actually settle.
-    const spline = new TrackSpline(getStageDef("cresta-ebro"));
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
     const field = createHeightField(spline);
     const all = spline.getAllSamples();
     const s = all[Math.floor(all.length * 0.8)];
@@ -705,7 +705,7 @@ describe("HeightField", () => {
   });
 
   it("returns colours in range", () => {
-    const spline = new TrackSpline(getStageDef("cresta-ebro"));
+    const spline = new TrackSpline(getStageDef("salita-cosola"));
     const field = createHeightField(spline);
     const all = spline.getAllSamples();
     for (let i = 0; i < all.length; i += 40) {
