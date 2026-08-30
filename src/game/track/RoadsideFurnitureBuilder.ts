@@ -277,17 +277,34 @@ export function buildRoadsideFurniture(
       signGroup.rotation.y = s.heading;
       landmarkGroup.add(signGroup);
     } else if (s.landmark === "hamlet" && s.s >= 50) {
-      const houseColors = ["#e2d5c3", "#d8b28a", "#c49a7a", "#ecd9b8"];
-      const shutterColors = ["#14532d", "#1e3a8a", "#451a03", "#166534"];
+      // Ligurian Apennine hamlet, not four copies of one box.
+      //
+      // Every house was previously an identical 6.4 x 5.2 x 5.4 block under an identical
+      // terracotta cone, with only the wall colour varying — so a village read as a row of
+      // clones. The interior of this region builds tall and narrow in stuccoed stone, roofed
+      // in local slate (ardesia) as often as in terracotta, with the odd low barn or byre
+      // between the houses.
+      const houseColors = ["#e2d5c3", "#d8b28a", "#c49a7a", "#ecd9b8", "#cfa98f", "#dfc9a2"];
+      const shutterColors = ["#14532d", "#1e3a8a", "#451a03", "#166534", "#3f2d1c"];
+      // Slate first: at this altitude it is the more common roof, and its grey is what makes
+      // the terracotta houses read as a mix rather than a uniform orange village.
+      const roofColors = ["#4b5563", "#5b6470", "#b45309", "#9a4a12", "#6b7280"];
 
       for (let h = -1; h <= 1; h += 2) {
-        const colorIdx = Math.abs(Math.floor(s.s / 40) + h) % houseColors.length;
+       for (let along = 0; along < 2; along++) {
+        // Deterministic per house: same village every build, but each dwelling different.
+        const seed = Math.abs(Math.floor(s.s / 7) * 31 + (h > 0 ? 17 : 5) + along * 47);
+        const colorIdx = seed % houseColors.length;
+        const roofIdx = (seed >> 2) % roofColors.length;
+        const variant = seed % 5; // 0-2 dwellings, 3 barn, 4 tower house
         const houseGroup = new THREE.Group();
 
-        const setback = s.halfWidth + 4.8 + ((i % 3) * 1.2);
-        const hW = 6.4;
-        const hD = 5.2;
-        const hH = 5.4;
+        const setback = s.halfWidth + 4.8 + ((seed % 7) * 0.9);
+
+        // Footprint and height by type. Tower houses are narrow and tall, barns low and wide.
+        const hW = variant === 4 ? 4.6 : variant === 3 ? 7.8 : 5.6 + (seed % 4) * 0.7;
+        const hD = variant === 3 ? 6.2 : 4.4 + ((seed >> 1) % 4) * 0.6;
+        const hH = variant === 4 ? 9.2 : variant === 3 ? 3.6 : 5.0 + ((seed >> 3) % 3) * 1.6;
 
         const baseGeo = new THREE.BoxGeometry(hW + 0.2, 2.4, hD + 0.2);
         const baseMat = new THREE.MeshStandardMaterial({ color: "#6b655b", roughness: 0.95, flatShading: true });
@@ -303,11 +320,14 @@ export function buildRoadsideFurniture(
         body.castShadow = true;
         body.receiveShadow = true;
 
-        const roofGeo = new THREE.ConeGeometry((hW / 2) * 1.35, 2.4, 4);
-        const roofMat = new THREE.MeshStandardMaterial({ color: "#b45309", roughness: 0.82 });
+        // Barns get a shallow roof, tower houses a steep one, dwellings something between.
+        const roofPitch = variant === 3 ? 1.4 : variant === 4 ? 3.0 : 2.2 + (seed % 3) * 0.35;
+        const roofGeo = new THREE.ConeGeometry((hW / 2) * 1.38, roofPitch, 4);
+        const roofMat = new THREE.MeshStandardMaterial({ color: roofColors[roofIdx], roughness: 0.84 });
         const roof = new THREE.Mesh(roofGeo, roofMat);
-        roof.position.set(0, hH + 1.9, 0);
-        roof.rotation.y = Math.PI / 4;
+        roof.position.set(0, hH + 0.8 + roofPitch / 2, 0);
+        // Ridge runs along the road for some, across it for others, so rooflines vary.
+        roof.rotation.y = Math.PI / 4 + (seed % 2) * (Math.PI / 2);
         roof.castShadow = true;
 
         const winGeo = new THREE.BoxGeometry(0.75, 1.05, 0.06);
@@ -316,8 +336,14 @@ export function buildRoadsideFurniture(
         const shutMat = new THREE.MeshStandardMaterial({ color: shutterColors[colorIdx], roughness: 0.7 });
 
         const faceZ = -(hD / 2 + 0.04);
-        for (const winX of [-1.8, 1.8]) {
-          for (const winY of [2.4, 4.6]) {
+        // Rows follow the building's real height, so a tower house gets three storeys and a
+        // barn one, instead of every type carrying the same two rows at fixed heights.
+        const storeys = variant === 3 ? 1 : Math.max(2, Math.round((hH - 1.2) / 2.2));
+        const winXs = variant === 4 ? [-1.1, 1.1] : [-(hW / 2 - 1.0), hW / 2 - 1.0];
+        for (const winX of winXs) {
+          for (let row = 0; row < storeys; row++) {
+            const winY = 2.4 + row * 2.2;
+            if (winY > hH + 0.2) continue;
             const win = new THREE.Mesh(winGeo, winMat);
             win.position.set(winX, winY, faceZ);
 
@@ -347,13 +373,21 @@ export function buildRoadsideFurniture(
         if (isDrop && (s.dropDepth ?? 0) > 20) continue;
 
         houseGroup.add(base, body, roof);
+        // Stagger the second dwelling along the road and set it back differently, so the two
+        // read as a street rather than as a pair facing each other across the carriageway.
+        const alongOffset = along === 0 ? 0 : 11.0 + (seed % 5) * 1.4;
+        const tanX = -s.normalZ;
+        const tanZ = s.normalX;
         houseGroup.position.set(
-          s.x + s.normalX * setback * h,
+          s.x + s.normalX * setback * h + tanX * alongOffset,
           s.y - 0.20,
-          s.z + s.normalZ * setback * h
+          s.z + s.normalZ * setback * h + tanZ * alongOffset
         );
-        houseGroup.rotation.y = s.heading + (h > 0 ? -Math.PI / 2 : Math.PI / 2);
+        // Roughly facing the road, but not all exactly square to it.
+        const skew = ((seed % 7) - 3) * 0.06;
+        houseGroup.rotation.y = s.heading + (h > 0 ? -Math.PI / 2 : Math.PI / 2) + skew;
         landmarkGroup.add(houseGroup);
+       }
       }
     }
   }

@@ -85,8 +85,18 @@ export class TerrainSystem {
     const samples = this.spline.getAllSamples();
     if (samples.length < 2) return new THREE.Mesh();
 
-    /** Below this the verge already meets the ground; a wall would be invisible clutter. */
-    const MIN_EXPOSED = 0.6;
+    /**
+     * Below this the verge effectively meets the ground and no structure is warranted.
+     *
+     * 0.6 m was too eager: on gently rolling ground the verge sits a little above the terrain
+     * almost everywhere, so a wall was drawn along practically the whole route — a continuous
+     * grey band flanking the road that read as a thick ugly kerb rather than as the occasional
+     * piece of engineering it should be. A road only looks supported where support is
+     * plausible; everywhere else the verge should simply meet the grass. Raised again after
+     * seeing it in the valley: at two metres of exposure the wall still drew as a broad grey
+     * band flanking the road across gently rolling ground, where nothing needs holding up.
+     */
+    const MIN_EXPOSED = 3.5;
     /**
      * Walls deeper than this are a cliff face, not a structure — let the drop read as a drop.
      *
