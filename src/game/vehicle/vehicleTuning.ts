@@ -74,8 +74,14 @@
  *   as a separate stage and its character — real altitude, ground falling away on both sides
  *   — folded into the new ridge finale at drop depths that read as a mountain rather than the
  *   1,300 m that made it look like a desert canyon.
+ *
+ * 11 -> 12: Salita shortened again, to 2.4 km and 12 tornanti — roughly two minutes. At 5.6 km
+ *   it still read as an endurance event rather than something to show someone, with long
+ *   straights between corners. Straights are now 90-160 m and drop depths 60-280 m rather
+ *   than up to 450: depth beyond the verge is invisible from the car but pulls ground out
+ *   from under the carriageway, forcing viaduct piers and costing geometry for nothing.
  */
-export const SIM_VERSION = 11;
+export const SIM_VERSION = 12;
 
 /*
  * Version history — append a line whenever this is bumped.

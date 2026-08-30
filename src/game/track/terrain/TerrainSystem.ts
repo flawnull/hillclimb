@@ -157,7 +157,24 @@ export class TerrainSystem {
         if (exposed > MAX_WALL) {
           strip.push({ x, z, top: roadEdgeY, bottom: roadEdgeY - DECK_FASCIA });
           if (i % (STEP * PIER_EVERY) === 0) {
-            piers.push({ x, z, top: roadEdgeY - DECK_FASCIA, bottom: groundY });
+            // A pier must land on the ground, and must not pass through a road on its way
+            // down. Where a switchback's lower leg runs beneath this span, a column dropped
+            // from the deck would spear straight through that carriageway. Real viaducts
+            // simply span those bays without a pier, so this one is skipped rather than
+            // shortened — a pier stopping in mid-air above the lower road looks worse than
+            // no pier at all.
+            const deckUnderside = roadEdgeY - DECK_FASCIA;
+            const blocked = this.field.index
+              .query(x, z, 40)
+              .some(
+                (h) =>
+                  Math.abs(h.lat) <= h.sample.halfWidth + 2.0 &&
+                  h.sample.y < deckUnderside - 1.0 &&
+                  h.sample.y > groundY + 1.0
+              );
+            if (!blocked) {
+              piers.push({ x, z, top: deckUnderside, bottom: groundY });
+            }
           }
           continue;
         }
@@ -172,13 +189,16 @@ export class TerrainSystem {
       flush();
     }
 
-    // Piers: a square column from the underside of the deck down to the ground. Capped in
-    // length so a pier over a genuine cliff does not run to the valley floor.
-    const MAX_PIER = 45;
+    // Piers: a square column from the underside of the deck down to the ground.
+    //
+    // No length cap. Capping at 45 m meant that anywhere the ground was further below than
+    // that, the column simply stopped in the air — piers that visibly failed to touch the
+    // earth, which is exactly the thing a viaduct exists to avoid. A pier either reaches the
+    // ground or is not emitted at all (see the blocking check above).
     for (const p of piers) {
       // Chunky enough to read as a concrete pier at speed rather than as a wire.
       const half = 0.95;
-      const bottom = Math.max(p.bottom, p.top - MAX_PIER);
+      const bottom = p.bottom;
       const base = verts.length / 3;
       for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
         verts.push(p.x + dx, p.top, p.z + dz);
@@ -280,13 +300,16 @@ export class TerrainSystem {
     }
     flushRun(runStart, samples.length - 1, runSide);
 
-    // Piers: a square column from the underside of the deck down to the ground. Capped in
-    // length so a pier over a genuine cliff does not run to the valley floor.
-    const MAX_PIER = 45;
+    // Piers: a square column from the underside of the deck down to the ground.
+    //
+    // No length cap. Capping at 45 m meant that anywhere the ground was further below than
+    // that, the column simply stopped in the air — piers that visibly failed to touch the
+    // earth, which is exactly the thing a viaduct exists to avoid. A pier either reaches the
+    // ground or is not emitted at all (see the blocking check above).
     for (const p of piers) {
       // Chunky enough to read as a concrete pier at speed rather than as a wire.
       const half = 0.95;
-      const bottom = Math.max(p.bottom, p.top - MAX_PIER);
+      const bottom = p.bottom;
       const base = verts.length / 3;
       for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
         verts.push(p.x + dx, p.top, p.z + dz);

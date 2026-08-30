@@ -151,11 +151,19 @@ export function buildRoadsideFurniture(
       const upY = cosB;
       const upZ = -s.normalZ * sinB;
 
+      // Clearance from the lane edge.
+      //
+      // 0.30 m was too tight. The kerb is placed using the halfWidth of ITS OWN sample, but
+      // the spline interpolates width between control points, so a few metres further along
+      // the carriageway can be wider than the kerb assumed — and a kerb block has width of
+      // its own on top of that. On the tighter stage layout this put a kerb 5 cm inside the
+      // driving lane. Half a metre absorbs both the interpolation and the block.
+      const KERB_CLEARANCE = 0.80;
       const kerb = new THREE.Mesh(kerbGeo, i % 4 === 0 ? kerbMatRed : kerbMatWhite);
       kerb.position.set(
-        s.x + s.normalX * (s.halfWidth + 0.30) * insideSign + upX * 0.04,
+        s.x + s.normalX * (s.halfWidth + KERB_CLEARANCE) * insideSign + upX * 0.04,
         s.y + upY * 0.04,
-        s.z + s.normalZ * (s.halfWidth + 0.30) * insideSign + upZ * 0.04
+        s.z + s.normalZ * (s.halfWidth + KERB_CLEARANCE) * insideSign + upZ * 0.04
       );
       kerb.rotation.y = s.heading;
       kerb.rotation.z = s.bank;

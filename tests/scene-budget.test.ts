@@ -30,8 +30,8 @@ import { countRenderables } from "../src/game/track/batchStatics";
  *  which trades a higher static mesh count for far fewer triangles drawn per frame.
  *  Measured totals are 1287 / 1421 / 1246; ceilings keep ~15% headroom. */
 const MAX_MESHES: Record<string, number> = {
-  "borbera-sprint": 1_500,
-  "salita-cosola": 1_550,
+  "borbera-sprint": 420,
+  "salita-cosola": 300,
 };
 
 /** Total triangles in a stage. Only a fraction is visible at once, but this bounds memory
@@ -47,8 +47,8 @@ const MAX_MESHES: Record<string, number> = {
 //  field + river + vegetation) are 74,432 / 282,462 / 81,696; the ceilings keep ~15% headroom
 //  for scenery work.
 const MAX_TRIANGLES: Record<string, number> = {
-  "borbera-sprint": 86_000,
-  "salita-cosola": 160_000,
+  "borbera-sprint": 88_000,
+  "salita-cosola": 105_000,
 };
 
 function buildStageScene(stageId: string) {

@@ -262,16 +262,31 @@ describe("valleyLayer", () => {
     const spline = new TrackSpline(getStageDef("salita-cosola"));
     const field = createHeightField(spline);
     const all = spline.getAllSamples();
-    const s = all[Math.floor(all.length * 0.8)];
-    assert.equal(s.exposure, "both", "expected the stage's 80%-mark sample to be exposed both sides");
+    // Find a both-sides-exposed sample rather than assuming where one sits. The ridge section
+    // has moved as the stage was reshaped, and hardcoding a fraction of the route made this
+    // test fail for a reason that had nothing to do with what it checks.
+    const s = all
+      .filter((smp) => smp.exposure === "both")
+      .reduce<(typeof all)[number] | undefined>(
+        (best, smp) => (!best || smp.dropDepth > best.dropDepth ? smp : best),
+        undefined
+      );
+    assert.ok(s, "stage should contain a section exposed on both sides");
 
     for (const side of [-1, 1]) {
-      const x = s.x + s.normalX * 400 * side;
+      const x = s!.x + s.normalX * 400 * side;
       const z = s.z + s.normalZ * 400 * side;
       const h = field.heightAt(x, z);
+      // Threshold derived from the stage's OWN declared drop rather than a fixed 150 m, which
+      // was calibrated when this section declared 1,300 m drops. The stage now declares a few
+      // hundred, so a fixed figure tested the stage data rather than the moat behaviour. What
+      // matters is that the ground stays a substantial fraction of the declared drop below the
+      // road far out — i.e. that the drop does not heal shut on its way to the field's floor.
+      const expectedFloor = s!.y - s!.dropDepth * 0.25;
       assert.ok(
-        h < s.y - 150,
-        `lat ${400 * side}: ground ${h.toFixed(1)} is not well below road ${s.y.toFixed(1)} (moat healed shut)`
+        h < expectedFloor,
+        `lat ${400 * side}: ground ${h.toFixed(1)} is not well below road ${s!.y.toFixed(1)} ` +
+          `(expected below ${expectedFloor.toFixed(1)}, drop declared ${s!.dropDepth} m — moat healed shut)`
       );
     }
   });
