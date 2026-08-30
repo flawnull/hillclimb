@@ -51,6 +51,8 @@ export class TerrainSystem {
   public readonly mesh: THREE.Group;
   public readonly riverMesh: THREE.Group;
   public readonly vegetationGroup: THREE.Group;
+  /** Retaining walls carrying the road wherever the terrain falls away beneath it. */
+  public readonly embankmentMesh: THREE.Group;
   private readonly spline: TrackSpline;
 
   constructor(spline: TrackSpline) {
@@ -60,6 +62,151 @@ export class TerrainSystem {
     this.riverMesh = chunkMeshBySpace(this.buildRiverMesh(), 250);
     this.vegetationGroup = new THREE.Group();
     buildInstancedVegetation(spline, this.field, this.vegetationGroup);
+    this.embankmentMesh = chunkMeshBySpace(this.buildEmbankment(), 250);
+  }
+
+  /**
+   * Retaining walls beneath the carriageway.
+   *
+   * The terrain is a heightfield — one height per (x, z) — and a switchback that doubles back
+   * over itself cannot be supported by one. Where the upper leg passes over ground that also
+   * belongs to the lower leg, the surface can only take a single height: at the upper road's
+   * level it buries the lower road, at the lower road's level the upper road floats in the
+   * air along with its guardrails. No amount of reweighting the carve fixes this, because it
+   * is a limit of the representation rather than a tuning error.
+   *
+   * Real mountain roads answer this by carrying their own support: the carriageway sits on a
+   * retaining wall or embankment built up from the slope. That is what this generates — a
+   * skirt dropping from each outer verge edge down to wherever the terrain actually is. It is
+   * geometry attached to the ROAD, so the heightfield stays single-valued and legal, and the
+   * road is supported no matter what the ground beneath is doing.
+   */
+  private buildEmbankment(): THREE.Mesh {
+    const samples = this.spline.getAllSamples();
+    if (samples.length < 2) return new THREE.Mesh();
+
+    /** Below this the verge already meets the ground; a wall would be invisible clutter. */
+    const MIN_EXPOSED = 0.6;
+    /**
+     * Walls deeper than this are a cliff face, not a structure — let the drop read as a drop.
+     *
+     * 26 m was far too tall: on an exposed section where the ground falls hundreds of metres,
+     * the wall became a slab the height of a building filling the view. A retaining wall on a
+     * mountain road is metres, not tens of metres. Kept generous enough that most exposed
+     * stretches are carried by an embankment — which reads as ground — leaving the viaduct
+     * below for the genuine stacked-switchback spans it is meant for.
+     */
+    const MAX_WALL = 16;
+    /** Longitudinal step. The wall only has to follow the road's curve, not its every sample. */
+    const STEP = 4;
+
+    /** Depth of the deck edge shown beneath the carriageway on a viaduct span, metres. */
+    const DECK_FASCIA = 1.1;
+    /** Emit a pier every this many kept samples. Sparse on purpose: a pier every few metres
+     *  reads as scaffolding rather than as a viaduct. */
+    const PIER_EVERY = 9;
+
+    const verts: number[] = [];
+    const indices: number[] = [];
+    const piers: { x: number; z: number; top: number; bottom: number }[] = [];
+
+    for (const side of [-1, 1] as const) {
+      let strip: { x: number; z: number; top: number; bottom: number }[] = [];
+
+      const flush = () => {
+        if (strip.length >= 2) {
+          const base = verts.length / 3;
+          for (const p of strip) {
+            verts.push(p.x, p.top, p.z);
+            verts.push(p.x, p.bottom, p.z);
+          }
+          for (let r = 0; r < strip.length - 1; r++) {
+            const a = base + r * 2;
+            const b = base + (r + 1) * 2;
+            // Wound so the wall faces outward from the road on this side.
+            if (side > 0) indices.push(a, a + 1, b, b, a + 1, b + 1);
+            else indices.push(a, b, a + 1, a + 1, b, b + 1);
+          }
+        }
+        strip = [];
+      };
+
+      for (let i = 0; i < samples.length; i += STEP) {
+        const smp = samples[i];
+        // Outer edge of the verge — where the built road actually ends.
+        const lat = (smp.halfWidth + 1.2) * side;
+        const x = smp.x + smp.normalX * lat;
+        const z = smp.z + smp.normalZ * lat;
+
+        const roadEdgeY = smp.y - 0.28;
+        const groundY = this.field.heightAt(x, z);
+        const exposed = roadEdgeY - groundY;
+
+        if (exposed < MIN_EXPOSED) {
+          // Road meets the ground here; end the current wall rather than bridging a gap.
+          flush();
+          continue;
+        }
+
+        // Beyond the wall's reach the road is not on an embankment at all — it is on a
+        // viaduct. This is the stacked-switchback case: a single-valued heightfield cannot be
+        // beneath the upper leg AND clear of the lower one, so the terrain correctly follows
+        // the lower road and the upper road is carried by structure instead. A fascia below
+        // the deck plus piers down to the ground is what a real mountain road does here, and
+        // it is the only thing that can span a gap of hundreds of metres.
+        if (exposed > MAX_WALL) {
+          strip.push({ x, z, top: roadEdgeY, bottom: roadEdgeY - DECK_FASCIA });
+          if (i % (STEP * PIER_EVERY) === 0) {
+            piers.push({ x, z, top: roadEdgeY - DECK_FASCIA, bottom: groundY });
+          }
+          continue;
+        }
+
+        strip.push({
+          x,
+          z,
+          top: roadEdgeY,
+          bottom: Math.max(groundY, roadEdgeY - MAX_WALL),
+        });
+      }
+      flush();
+    }
+
+    // Piers: a square column from the underside of the deck down to the ground. Capped in
+    // length so a pier over a genuine cliff does not run to the valley floor.
+    const MAX_PIER = 45;
+    for (const p of piers) {
+      // Chunky enough to read as a concrete pier at speed rather than as a wire.
+      const half = 0.95;
+      const bottom = Math.max(p.bottom, p.top - MAX_PIER);
+      const base = verts.length / 3;
+      for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
+        verts.push(p.x + dx, p.top, p.z + dz);
+        verts.push(p.x + dx, bottom, p.z + dz);
+      }
+      for (let f = 0; f < 4; f++) {
+        const a = base + f * 2;
+        const b = base + ((f + 1) % 4) * 2;
+        indices.push(a, a + 1, b, b, a + 1, b + 1);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({
+      // Pale weathered stone. A dark wall reads as a hole in the hillside rather than as
+      // masonry, which is the opposite of the problem being solved.
+      color: "#9a9187",
+      roughness: 0.95,
+      metalness: 0.0,
+      // Seen from both sides: a wall on the far side of a hairpin is viewed from behind.
+      side: THREE.DoubleSide,
+    });
+
+    return new THREE.Mesh(geo, mat);
   }
 
   private buildRiverMesh(): THREE.Mesh {
@@ -77,8 +224,15 @@ export class TerrainSystem {
     const RIVER_WIDTH = 14;
     const MIN_RUN = 12;
 
+    /** Depth of the deck edge shown beneath the carriageway on a viaduct span, metres. */
+    const DECK_FASCIA = 1.1;
+    /** Emit a pier every this many kept samples. Sparse on purpose: a pier every few metres
+     *  reads as scaffolding rather than as a viaduct. */
+    const PIER_EVERY = 9;
+
     const verts: number[] = [];
     const indices: number[] = [];
+    const piers: { x: number; z: number; top: number; bottom: number }[] = [];
 
     const sideOf = (s: SplineSample): -1 | 0 | 1 => {
       if (s.exposure === "left") return -1;
@@ -126,6 +280,25 @@ export class TerrainSystem {
     }
     flushRun(runStart, samples.length - 1, runSide);
 
+    // Piers: a square column from the underside of the deck down to the ground. Capped in
+    // length so a pier over a genuine cliff does not run to the valley floor.
+    const MAX_PIER = 45;
+    for (const p of piers) {
+      // Chunky enough to read as a concrete pier at speed rather than as a wire.
+      const half = 0.95;
+      const bottom = Math.max(p.bottom, p.top - MAX_PIER);
+      const base = verts.length / 3;
+      for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
+        verts.push(p.x + dx, p.top, p.z + dz);
+        verts.push(p.x + dx, bottom, p.z + dz);
+      }
+      for (let f = 0; f < 4; f++) {
+        const a = base + f * 2;
+        const b = base + ((f + 1) % 4) * 2;
+        indices.push(a, a + 1, b, b, a + 1, b + 1);
+      }
+    }
+
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
     geo.setIndex(indices);
@@ -144,7 +317,7 @@ export class TerrainSystem {
   }
 
   public dispose(): void {
-    for (const root of [this.mesh, this.riverMesh, this.vegetationGroup]) {
+    for (const root of [this.mesh, this.riverMesh, this.vegetationGroup, this.embankmentMesh]) {
       root.traverse((node) => {
         const m = node as THREE.Mesh;
         if (!m.isMesh) return;

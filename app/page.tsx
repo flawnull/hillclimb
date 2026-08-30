@@ -29,7 +29,10 @@ const GameCanvas = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-white font-mono">
+      // Frosted rather than opaque: the HUD is already mounted behind this, and a flat slate
+      // panel made the wait look like a broken page. Blurring what is behind reads as the
+      // stage being prepared underneath.
+      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950/70 backdrop-blur-xl text-white font-mono">
         <div className="w-12 h-12 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mb-4" />
         <div className="text-sm tracking-widest text-amber-400 font-bold uppercase">
           Generating Mountain Stage...

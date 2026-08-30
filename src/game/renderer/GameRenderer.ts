@@ -275,6 +275,7 @@ export class GameRenderer {
     this.trackGroup.add(this.terrain.mesh);
     this.trackGroup.add(this.terrain.riverMesh);
     this.trackGroup.add(this.terrain.vegetationGroup);
+    this.trackGroup.add(this.terrain.embankmentMesh);
   }
 
   /**
