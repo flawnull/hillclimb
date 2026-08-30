@@ -488,6 +488,22 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
 }
 
 /** Frustum-cullable form: the same surface, split into 250 m spatial chunks. */
+/**
+ * Chunk size, metres.
+ *
+ * 250 m was chosen when the terrain was a narrow corridor and the camera saw 900 m. Neither
+ * holds now: the field spans the route bounding box plus 2.5 km of padding on every side, and
+ * the far plane is 6 km, so a 250 m grid produced 1,087 separate meshes of which most were in
+ * frustum — 1,087 draw calls for terrain alone, against roughly 250 for everything else in
+ * the scene combined, and a documented budget of about 120.
+ *
+ * Finer chunks only pay off if culling them saves meaningful triangle work, and it does not
+ * here: the whole terrain surface is ~46k triangles, so drawing more of it than strictly
+ * visible costs far less than issuing hundreds of extra draw calls. At 800 m the same
+ * geometry becomes 121 meshes — a ninefold reduction in calls for no change in triangles.
+ */
+const TERRAIN_CHUNK_M = 800;
+
 export function buildChunkedTerrain(field: HeightField): THREE.Group {
-  return chunkMeshBySpace(buildTerrainMesh(field), 250);
+  return chunkMeshBySpace(buildTerrainMesh(field), TERRAIN_CHUNK_M);
 }
