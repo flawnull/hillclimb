@@ -14,7 +14,7 @@ export function createBorberaSprintStage(): StageDef {
   b.village({ length: 180, halfWidth: 3.0, grade: -0.01, landmark: 'hamlet' });
   b.straight(120, { grade: -0.02, halfWidth: 3.8 });
   b.bridge({ length: 90, dropDepth: 35, landmark: 'bridge' });
-  b.straight(250, { grade: -0.03, halfWidth: 4.0 });
+  b.straight(250, { grade: -0.03, halfWidth: 4.0, landmark: 'hamlet' }); // Borbera riverside houses
 
   // Fast Right Sweeper along riverbank
   b.sweeper({ dir: 'right', radius: 110, arcDeg: 65, grade: -0.03, exposure: 'left', dropDepth: 45, guardrail: true });
@@ -23,14 +23,14 @@ export function createBorberaSprintStage(): StageDef {
 
   // Sector 2: Technical chicane & first hairpin
   b.sweeper({ dir: 'left', radius: 85, arcDeg: 50, grade: -0.03, exposure: 'right', dropDepth: 60 });
-  b.straight(180, { grade: -0.02, halfWidth: 3.8 });
+  b.straight(180, { grade: -0.02, halfWidth: 3.8, landmark: 'hamlet' }); // Molino, before the hairpin
   b.hairpin({ dir: 'left', radius: 13, arcDeg: 160, entryGrade: -0.03, exitGrade: -0.02, exposure: 'right', dropDepth: 85, guardrail: true });
   b.straight(280, { grade: -0.04, halfWidth: 4.0, exposure: 'right', dropDepth: 90 });
   b.sweeper({ dir: 'right', radius: 95, arcDeg: 55, grade: -0.03, exposure: 'left', dropDepth: 70, guardrail: true });
   b.checkpoint(); // Checkpoint 2 (~2.1 km)
 
   // Sector 3: Second bridge and riverside high-speed section
-  b.straight(200, { grade: -0.03, halfWidth: 4.0 });
+  b.straight(200, { grade: -0.03, halfWidth: 4.0, landmark: 'hamlet' }); // Cosola di Sotto
   b.bridge({ length: 80, dropDepth: 40, landmark: 'bridge' });
   b.straight(350, { grade: -0.04, halfWidth: 4.2, exposure: 'left', dropDepth: 55 });
   b.sweeper({ dir: 'left', radius: 130, arcDeg: 70, grade: -0.03, exposure: 'right', dropDepth: 75 });
@@ -40,7 +40,7 @@ export function createBorberaSprintStage(): StageDef {
 
   // Sector 4: Final sprint into Rocchetta valley finish
   b.sweeper({ dir: 'right', radius: 100, arcDeg: 60, grade: -0.03, exposure: 'left', dropDepth: 65, guardrail: true });
-  b.straight(400, { grade: -0.04, halfWidth: 4.2 });
+  b.straight(400, { grade: -0.04, halfWidth: 4.2, landmark: 'hamlet' }); // Rocchetta outskirts
   b.sweeper({ dir: 'left', radius: 120, arcDeg: 45, grade: -0.02, exposure: 'none' });
   b.straight(300, { grade: -0.02, halfWidth: 4.2, landmark: 'sign' });
   b.checkpoint(); // Finish Checkpoint (~4.2 km)

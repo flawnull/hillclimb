@@ -13,14 +13,14 @@ export class RoadMesh {
   private spline: TrackSpline;
   private roadTexture: THREE.CanvasTexture;
 
-  constructor(spline: TrackSpline) {
+  constructor(spline: TrackSpline, groundAt?: (x: number, z: number) => number) {
     this.spline = spline;
     this.guardrailGroup = new THREE.Group();
     this.landmarkGroup = new THREE.Group();
     this.roadTexture = createTwoLaneRoadTexture();
     // Chunked so the frustum culler can reject the 10 km of road behind the car.
     this.mesh = chunkMeshBySpace(this.buildRoadGeometry());
-    buildRoadsideFurniture(this.spline.getAllSamples(), this.landmarkGroup, this.guardrailGroup);
+    buildRoadsideFurniture(this.spline.getAllSamples(), this.landmarkGroup, this.guardrailGroup, groundAt);
 
     // Collapse the per-prop meshes into merged per-chunk batches (§13.2). Authoring stays
     // one-prop-at-a-time; drawing does not.

@@ -28,7 +28,7 @@ export function createSalitaCosolaStage(): StageDef {
   b.hairpin({ dir: 'left', radius: 10.5, arcDeg: 170, entryGrade: 0.08, exitGrade: 0.10, exposure: 'right', dropDepth: 60 });  // Tornante 1
   b.straight(130, { grade: 0.09, halfWidth: 3.6, exposure: 'right', dropDepth: 70 });
   b.hairpin({ dir: 'right', radius: 11.0, arcDeg: 165, entryGrade: 0.09, exitGrade: 0.11, exposure: 'left', dropDepth: 80 });  // Tornante 2
-  b.straight(110, { grade: 0.09, halfWidth: 3.6 });
+  b.straight(110, { grade: 0.09, halfWidth: 3.6, landmark: 'hamlet' }); // Case Soprane
   b.hairpin({ dir: 'left', radius: 10.5, arcDeg: 170, entryGrade: 0.09, exitGrade: 0.11, exposure: 'right', dropDepth: 90 });  // Tornante 3
   b.sweeper({ dir: 'right', radius: 55, arcDeg: 70, grade: 0.08, exposure: 'left', dropDepth: 100, guardrail: true });
   b.hairpin({ dir: 'right', radius: 11.0, arcDeg: 165, entryGrade: 0.09, exitGrade: 0.10, exposure: 'left', dropDepth: 110 }); // Tornante 4
@@ -44,7 +44,7 @@ export function createSalitaCosolaStage(): StageDef {
   b.hairpin({ dir: 'left', radius: 11.0, arcDeg: 165, entryGrade: 0.10, exitGrade: 0.11, exposure: 'right', dropDepth: 160 }); // Tornante 7
   b.sweeper({ dir: 'left', radius: 60, arcDeg: 65, grade: 0.09, exposure: 'right', dropDepth: 170, guardrail: true });
   b.hairpin({ dir: 'right', radius: 10.5, arcDeg: 170, entryGrade: 0.10, exitGrade: 0.11, exposure: 'left', dropDepth: 180 }); // Tornante 8
-  b.straight(115, { grade: 0.09, halfWidth: 3.8, landmark: 'shrine' });
+  b.straight(115, { grade: 0.09, halfWidth: 3.8, landmark: 'hamlet' }); // Cosola village
   b.hairpin({ dir: 'left', radius: 10.5, arcDeg: 170, entryGrade: 0.10, exitGrade: 0.11, exposure: 'right', dropDepth: 190 }); // Tornante 9
   b.straight(110, { grade: 0.09, halfWidth: 3.8 });
   b.checkpoint(); // Checkpoint 2 (~1.8 km)
@@ -57,7 +57,7 @@ export function createSalitaCosolaStage(): StageDef {
   b.hairpin({ dir: 'left', radius: 10.5, arcDeg: 170, entryGrade: 0.10, exitGrade: 0.10, exposure: 'right', dropDepth: 230 }); // Tornante 11
   b.sweeper({ dir: 'right', radius: 80, arcDeg: 70, grade: 0.08, exposure: 'left', dropDepth: 240, guardrail: true });
   b.hairpin({ dir: 'right', radius: 11.5, arcDeg: 160, entryGrade: 0.08, exitGrade: 0.07, exposure: 'left', dropDepth: 250 }); // Tornante 12
-  b.straight(140, { grade: 0.06, halfWidth: 3.8, landmark: 'pylon' });
+  b.straight(140, { grade: 0.06, halfWidth: 3.8, landmark: 'hamlet' }); // last houses before the crest
   b.sweeper({ dir: 'left', radius: 95, arcDeg: 60, grade: 0.05, exposure: 'both', dropDepth: 260, guardrail: false });
   b.straight(160, { grade: 0.04, halfWidth: 4.0, exposure: 'both', dropDepth: 270 });
   b.sweeper({ dir: 'right', radius: 110, arcDeg: 45, grade: 0.03, exposure: 'both', dropDepth: 280, guardrail: false });

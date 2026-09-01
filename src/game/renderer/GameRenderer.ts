@@ -9,6 +9,7 @@ import { CarDef } from "../vehicle/cars";
 import { TrackSpline } from "../track/TrackSpline";
 import { RoadMesh } from "../track/RoadMesh";
 import { TerrainSystem } from "../track/terrain/TerrainSystem";
+import { createHeightField } from "../track/terrain/heightField";
 import { QualityTier } from "@/store/gameStore";
 import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
@@ -263,7 +264,12 @@ export class GameRenderer {
     if (this.roadMesh) {
       this.disposeRoadMesh(this.roadMesh);
     }
-    this.roadMesh = new RoadMesh(spline);
+    // Build the height field FIRST: roadside buildings stand well back from the carriageway
+    // and must sit on the terrain, not at road height. The field is handed to both consumers
+    // so it is only constructed once.
+    const field = createHeightField(spline);
+
+    this.roadMesh = new RoadMesh(spline, (x, z) => field.heightAt(x, z));
     this.trackGroup.add(this.roadMesh.mesh);
     this.trackGroup.add(this.roadMesh.guardrailGroup);
     this.trackGroup.add(this.roadMesh.landmarkGroup);
@@ -271,7 +277,7 @@ export class GameRenderer {
     // 2. Build the unified terrain surface, river and vegetation. There is no separate
     // backdrop mesh: near ground and distant mountains are one continuous surface.
     this.terrain?.dispose();
-    this.terrain = new TerrainSystem(spline);
+    this.terrain = new TerrainSystem(spline, field);
     this.trackGroup.add(this.terrain.mesh);
     this.trackGroup.add(this.terrain.riverMesh);
     this.trackGroup.add(this.terrain.vegetationGroup);

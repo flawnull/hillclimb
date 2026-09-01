@@ -55,9 +55,11 @@ export class TerrainSystem {
   public readonly embankmentMesh: THREE.Group;
   private readonly spline: TrackSpline;
 
-  constructor(spline: TrackSpline) {
+  constructor(spline: TrackSpline, field?: HeightField) {
     this.spline = spline;
-    this.field = createHeightField(spline);
+    // Accepts a field the caller already built, so the renderer can ground roadside buildings
+    // on the same terrain without paying to construct it twice.
+    this.field = field ?? createHeightField(spline);
     this.mesh = buildChunkedTerrain(this.field);
     this.riverMesh = chunkMeshBySpace(this.buildRiverMesh(), 250);
     this.vegetationGroup = new THREE.Group();

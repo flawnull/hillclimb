@@ -17,7 +17,17 @@ function detNormalizeAngle(a: number): number {
 export function buildRoadsideFurniture(
   samples: SplineSample[],
   landmarkGroup: THREE.Group,
-  guardrailGroup: THREE.Group
+  guardrailGroup: THREE.Group,
+  /**
+   * Terrain height at a world point. Optional so the builder still works without a field
+   * (tests construct RoadMesh alone), in which case props fall back to road height.
+   *
+   * Buildings need this. Everything else here — guardrails, kerbs, signs — hugs the
+   * carriageway, where road height IS ground height. A house stands 10-14 m back, and over
+   * that distance the hillside has usually moved, so placing it at the road's height left it
+   * hovering in the air on the downhill side.
+   */
+  groundAt?: (x: number, z: number) => number
 ): void {
   const POST_RADIAL_SEGMENTS = 6;
   const POLE_RADIAL_SEGMENTS = 8;
@@ -378,11 +388,12 @@ export function buildRoadsideFurniture(
         const alongOffset = along === 0 ? 0 : 11.0 + (seed % 5) * 1.4;
         const tanX = -s.normalZ;
         const tanZ = s.normalX;
-        houseGroup.position.set(
-          s.x + s.normalX * setback * h + tanX * alongOffset,
-          s.y - 0.20,
-          s.z + s.normalZ * setback * h + tanZ * alongOffset
-        );
+        const hx = s.x + s.normalX * setback * h + tanX * alongOffset;
+        const hz = s.z + s.normalZ * setback * h + tanZ * alongOffset;
+        // Sit the house on the ground at its OWN position, sunk slightly so the stone base
+        // beds into the slope rather than perching on it.
+        const hy = (groundAt ? groundAt(hx, hz) : s.y) - 0.35;
+        houseGroup.position.set(hx, hy, hz);
         // Roughly facing the road, but not all exactly square to it.
         const skew = ((seed % 7) - 3) * 0.06;
         houseGroup.rotation.y = s.heading + (h > 0 ? -Math.PI / 2 : Math.PI / 2) + skew;
