@@ -336,3 +336,41 @@ body {
 @media (max-height: 560px) {
   .hud-speedo-extra { display: none; }
 }
+
+
+/* ── Loading veil ─────────────────────────────────────────────────────────
+ * A road, not a spinner. "Generating Mountain Stage..." told the player what
+ * the code was doing rather than what was happening, which reads as a
+ * developer message; the lane markings sliding past say "loading" and "this
+ * is a driving game" at the same time, with no jargon to parse.
+ */
+@keyframes vb-lane-dash {
+  from { background-position: 0 0; }
+  to   { background-position: -80px 0; }
+}
+
+.vb-lane {
+  background-image: repeating-linear-gradient(
+    to right,
+    rgb(245 158 11) 0 34px,
+    transparent 34px 80px
+  );
+  animation: vb-lane-dash 0.75s linear infinite;
+}
+
+@keyframes vb-loading-dots {
+  0%, 20%  { opacity: 0.15; }
+  50%      { opacity: 1; }
+  100%     { opacity: 0.15; }
+}
+
+.vb-dot {
+  animation: vb-loading-dots 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vb-lane,
+  .vb-dot {
+    animation: none;
+  }
+}

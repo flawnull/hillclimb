@@ -120,7 +120,6 @@ export function buildInstancedVegetation(
   pineTier2.translate(0, 6.2, 0);
   const pineGeo = mergeGeometries([pineTrunk, pineTier1, pineTier2]);
   const pineMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.FrontSide, transparent: false, depthWrite: true });
-  const pineMesh = new THREE.InstancedMesh(pineGeo, pineMat, count);
 
   // 2. Ligurian Cypress
   const cypTrunk = colorGeo(new THREE.CylinderGeometry(0.18, 0.26, 1.8, 8), "#3d2b1f");
@@ -129,7 +128,6 @@ export function buildInstancedVegetation(
   cypCone.translate(0, 4.8, 0);
   const cypGeo = mergeGeometries([cypTrunk, cypCone]);
   const cypMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.80, side: THREE.FrontSide, transparent: false, depthWrite: true });
-  const cypMesh = new THREE.InstancedMesh(cypGeo, cypMat, count);
 
   // 3. Ligurian Olive Trees
   const oliveTrunk = colorGeo(new THREE.CylinderGeometry(0.26, 0.42, 2.6, 8), "#5c4a38");
@@ -140,7 +138,6 @@ export function buildInstancedVegetation(
   oliveLobe2.translate(0.6, 3.6, 0.3);
   const oliveGeo = mergeGeometries([oliveTrunk, oliveLobe1, oliveLobe2]);
   const oliveMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, side: THREE.FrontSide, transparent: false, depthWrite: true });
-  const oliveMesh = new THREE.InstancedMesh(oliveGeo, oliveMat, count);
 
   // 4. Mountain Chestnut & Beech Woods
   const chestnutTrunk = colorGeo(new THREE.CylinderGeometry(0.32, 0.50, 3.8, 8), "#3b2314");
@@ -151,19 +148,37 @@ export function buildInstancedVegetation(
   chestnutLobe2.translate(-0.8, 5.0, 0.6);
   const chestnutGeo = mergeGeometries([chestnutTrunk, chestnutLobe1, chestnutLobe2]);
   const chestnutMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.80, side: THREE.FrontSide, transparent: false, depthWrite: true });
-  const chestnutMesh = new THREE.InstancedMesh(chestnutGeo, chestnutMat, count);
 
   // 5. Limestone Boulders
   const rockGeo = new THREE.DodecahedronGeometry(2.2, 0);
   const rockMat = new THREE.MeshStandardMaterial({ color: "#94a3b8", roughness: 0.92, flatShading: true });
-  const rockMesh = new THREE.InstancedMesh(rockGeo, rockMat, count);
 
   const dummy = new THREE.Object3D();
-  let pineIdx = 0;
-  let cypIdx = 0;
-  let oliveIdx = 0;
-  let chestnutIdx = 0;
-  let rockIdx = 0;
+
+  /**
+   * Placements are COLLECTED first and only turned into meshes at the end, bucketed by
+   * position — see the chunking note at the bottom of this function.
+   */
+  interface Placement {
+    species: string;
+    matrix: THREE.Matrix4;
+    x: number;
+    z: number;
+  }
+  const placements: Placement[] = [];
+  const emit = (species: string, x: number, z: number): void => {
+    placements.push({ species, matrix: dummy.matrix.clone(), x, z });
+  };
+
+  // Retained only to keep the per-species population caps the old code enforced through
+  // `idx < count`, which is what stops one species swamping the whole stage.
+  const emitted: Record<string, number> = {
+    "veg-pine": 0,
+    "veg-cypress": 0,
+    "veg-olive": 0,
+    "veg-chestnut": 0,
+    "veg-rock": 0,
+  };
 
   for (let i = 2; i < samples.length - 2; i += 3) {
     const s = samples[i];
@@ -215,52 +230,89 @@ export function buildInstancedVegetation(
       dummy.rotation.y = spin;
       dummy.updateMatrix();
 
-      if (isRiverSide && rockRoll > 0.72 && rockIdx < count) {
+      if (isRiverSide && rockRoll > 0.72 && emitted["veg-rock"] < count) {
         dummy.position.y = posY + 0.35;
         dummy.scale.set(1.2 + speciesRoll * 0.6, 0.7 + speciesRoll * 0.4, 1.2 + speciesRoll * 0.6);
         dummy.updateMatrix();
-        rockMesh.setMatrixAt(rockIdx++, dummy.matrix);
+        emitted["veg-rock"]++;
+        emit("veg-rock", posX, pz);
       } else if (alt < 620) {
-        if (speciesRoll > 0.4 && oliveIdx < count) {
-          oliveMesh.setMatrixAt(oliveIdx++, dummy.matrix);
-        } else if (cypIdx < count) {
-          cypMesh.setMatrixAt(cypIdx++, dummy.matrix);
+        if (speciesRoll > 0.4 && emitted["veg-olive"] < count) {
+          emitted["veg-olive"]++;
+          emit("veg-olive", posX, pz);
+        } else if (emitted["veg-cypress"] < count) {
+          emitted["veg-cypress"]++;
+          emit("veg-cypress", posX, pz);
         }
       } else if (alt >= 620 && alt < 980) {
-        if (speciesRoll > 0.35 && pineIdx < count) {
-          pineMesh.setMatrixAt(pineIdx++, dummy.matrix);
-        } else if (chestnutIdx < count) {
-          chestnutMesh.setMatrixAt(chestnutIdx++, dummy.matrix);
+        if (speciesRoll > 0.35 && emitted["veg-pine"] < count) {
+          emitted["veg-pine"]++;
+          emit("veg-pine", posX, pz);
+        } else if (emitted["veg-chestnut"] < count) {
+          emitted["veg-chestnut"]++;
+          emit("veg-chestnut", posX, pz);
         }
-      } else if (chestnutIdx < count) {
-        chestnutMesh.setMatrixAt(chestnutIdx++, dummy.matrix);
+      } else if (emitted["veg-chestnut"] < count) {
+        emitted["veg-chestnut"]++;
+        emit("veg-chestnut", posX, pz);
       }
     }
   }
 
-  pineMesh.count = pineIdx;
-  cypMesh.count = cypIdx;
-  oliveMesh.count = oliveIdx;
-  chestnutMesh.count = chestnutIdx;
-  rockMesh.count = rockIdx;
+  // --- Spatial chunking -----------------------------------------------------------------
+  //
+  // One InstancedMesh per species covering the whole stage is one draw call, which reads as
+  // efficient and is the reason it was written that way. It is not: an InstancedMesh is
+  // frustum-culled as a single object against a bounding sphere that spans the entire
+  // route, so it is either drawn in full or not at all. Every tree on the stage was
+  // rasterised every frame — in the main pass AND again in the directional light's shadow
+  // pass, which redraws every caster from the sun's point of view whether or not it is
+  // anywhere near the 120 m shadow box.
+  //
+  // Measured in a headless sweep of the camera through 360 degrees at one point on Borbera
+  // Sprint: 397k triangles submitted per frame regardless of heading, of which the
+  // vegetation was the largest single share, and the same sweep cost 29.1 s with shadows
+  // against 5.9 s without. Nothing about that changed when the camera turned to face empty
+  // hillside, which is the shape of "it gets laggy when you turn": the cost is paid in
+  // every direction, so the frame budget is already spent before the direction with the
+  // most geometry in it comes round.
+  //
+  // Bucketing the instances into CHUNK_M cells and emitting one InstancedMesh per
+  // (species, cell) gives the culler something it can actually reject. Geometry and
+  // material are shared across cells, so this costs no extra memory and only as many extra
+  // draw calls as there are cells genuinely on screen.
+  const CHUNK_M = 240;
 
-  pineMesh.instanceMatrix.needsUpdate = true;
-  cypMesh.instanceMatrix.needsUpdate = true;
-  oliveMesh.instanceMatrix.needsUpdate = true;
-  chestnutMesh.instanceMatrix.needsUpdate = true;
-  rockMesh.instanceMatrix.needsUpdate = true;
+  const perSpecies: Record<string, { geo: THREE.BufferGeometry; mat: THREE.Material }> = {
+    "veg-pine": { geo: pineGeo, mat: pineMat },
+    "veg-cypress": { geo: cypGeo, mat: cypMat },
+    "veg-olive": { geo: oliveGeo, mat: oliveMat },
+    "veg-chestnut": { geo: chestnutGeo, mat: chestnutMat },
+    "veg-rock": { geo: rockGeo, mat: rockMat },
+  };
 
-  pineMesh.castShadow = true;
-  cypMesh.castShadow = true;
-  oliveMesh.castShadow = true;
-  chestnutMesh.castShadow = true;
+  const buckets = new Map<string, Placement[]>();
+  for (const pl of placements) {
+    const key = `${pl.species}|${Math.floor(pl.x / CHUNK_M)}|${Math.floor(pl.z / CHUNK_M)}`;
+    const list = buckets.get(key);
+    if (list) list.push(pl);
+    else buckets.set(key, [pl]);
+  }
 
-  // Named so tests can tell the species apart without depending on child order.
-  pineMesh.name = "veg-pine";
-  cypMesh.name = "veg-cypress";
-  oliveMesh.name = "veg-olive";
-  chestnutMesh.name = "veg-chestnut";
-  rockMesh.name = "veg-rock";
-
-  vegetationGroup.add(pineMesh, cypMesh, oliveMesh, chestnutMesh, rockMesh);
+  for (const [key, list] of buckets) {
+    const species = key.slice(0, key.indexOf("|"));
+    const { geo, mat } = perSpecies[species];
+    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+    for (let i = 0; i < list.length; i++) mesh.setMatrixAt(i, list[i].matrix);
+    mesh.instanceMatrix.needsUpdate = true;
+    // Named by species, not by cell: tests and any future per-species logic group on this,
+    // and which cell an instance landed in is an implementation detail of the culler.
+    mesh.name = species;
+    mesh.castShadow = species !== "veg-rock";
+    // Instance matrices are baked at build time and never move, so the bounding volume the
+    // culler needs can be computed once. Without this three.js falls back to the geometry's
+    // own sphere, which ignores the instance offsets entirely and would cull cells wrongly.
+    mesh.computeBoundingSphere();
+    vegetationGroup.add(mesh);
+  }
 }

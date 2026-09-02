@@ -51,6 +51,31 @@ const MAX_TRIANGLES: Record<string, number> = {
   "salita-cosola": 105_000,
 };
 
+/**
+ * Meshes the prop batcher may leave behind per stage, and the floor on how much geometry
+ * each of those meshes must be carrying.
+ *
+ * The mesh ceilings above bound how much a stage BUILDS. They say nothing about how well it
+ * batches, and that is the number a browser on a laptop actually struggles with: measured on
+ * one driving frame of Borbera Sprint, the landmark group alone cost 416 draw calls for 31k
+ * triangles — 75 triangles per call — because `materialSignature` keyed on colour and a
+ * hamlet deals out six wall colours, five roof colours, five shutter colours plus doors,
+ * windows, plinths and chimneys, while kerbs come in red and white. Every one was its own
+ * bucket. The whole scene was 950 draw calls a frame, which at 60 Hz is 57,000 a second of
+ * driver overhead.
+ *
+ * Baking colour into vertices, quantising roughness, and widening the batching chunk brought
+ * the same frame to 558. These assertions are what stops a future prop from reintroducing a
+ * per-instance material and quietly undoing it. Measured after the fix: landmarks 41 meshes
+ * at 373 tris each on Borbera and 23 at 1130 on Salita; guardrails 15 at 790 and 6 at 4764.
+ */
+const MAX_PROP_MESHES: Record<string, number> = {
+  "borbera-sprint": 70,
+  "salita-cosola": 45,
+};
+/** Triangles per prop mesh, averaged. Below this the batcher is not batching. */
+const MIN_TRIS_PER_PROP_MESH = 250;
+
 function buildStageScene(stageId: string) {
   const spline = new TrackSpline(getStageDef(stageId));
   const road = new RoadMesh(spline);
@@ -91,6 +116,35 @@ describe("Scene budget", () => {
       assert.ok(
         stats.triangles <= ceiling,
         `${entry.id}: ${stats.triangles} triangles exceeds ceiling ${ceiling}.`
+      );
+    });
+  }
+
+  for (const entry of STAGE_LIST) {
+    it(`${entry.id} batches its roadside props into few, well-filled draws`, () => {
+      const spline = new TrackSpline(getStageDef(entry.id));
+      const road = new RoadMesh(spline);
+
+      const landmarks = countRenderables(road.landmarkGroup);
+      const guardrails = countRenderables(road.guardrailGroup);
+      const meshes = landmarks.meshes + guardrails.meshes;
+      const triangles = landmarks.triangles + guardrails.triangles;
+
+      const ceiling = MAX_PROP_MESHES[entry.id];
+      assert.ok(
+        meshes <= ceiling,
+        `${entry.id}: ${meshes} prop meshes after batching exceeds ceiling ${ceiling}. ` +
+          `Each one is a draw call every frame it is on screen. The usual cause is a new ` +
+          `prop whose material differs from its neighbours' in something materialSignature ` +
+          `keys on, so it cannot share their bucket.`
+      );
+
+      const perMesh = triangles / Math.max(1, meshes);
+      assert.ok(
+        perMesh >= MIN_TRIS_PER_PROP_MESH,
+        `${entry.id}: prop batches average only ${perMesh.toFixed(0)} triangles each ` +
+          `(${triangles} across ${meshes} meshes). Draws this small are pure overhead — ` +
+          `the props are being split into buckets rather than merged.`
       );
     });
   }

@@ -245,11 +245,21 @@ export default function HomePage() {
           role="status"
           aria-live="polite"
         >
-          <div className="w-12 h-12 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mb-4" />
-          <div className="text-sm tracking-widest text-amber-400 font-bold uppercase">
-            Generating Mountain Stage...
+          <div className="text-2xl sm:text-3xl tracking-[0.35em] text-amber-400 font-black uppercase pl-[0.35em]">
+            Loading
+            <span className="vb-dot" style={{ animationDelay: "0ms" }}>.</span>
+            <span className="vb-dot" style={{ animationDelay: "200ms" }}>.</span>
+            <span className="vb-dot" style={{ animationDelay: "400ms" }}>.</span>
           </div>
-          <div className="text-xs text-slate-500 mt-1">Val Borbera Hillclimb</div>
+
+          {/* A stretch of road with its centre line running past. */}
+          <div className="mt-6 w-56 sm:w-72 h-3 rounded-full bg-slate-800/80 overflow-hidden border border-slate-700/70">
+            <div className="vb-lane h-full w-full opacity-90" />
+          </div>
+
+          <div className="text-[11px] tracking-widest text-slate-400 mt-5 uppercase">
+            Val Borbera Hillclimb
+          </div>
         </div>
       )}
 

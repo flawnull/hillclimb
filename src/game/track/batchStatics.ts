@@ -19,8 +19,17 @@
 
 import * as THREE from "three";
 
-/** Edge length of a batching chunk, metres. */
-const DEFAULT_CHUNK_SIZE = 250;
+/**
+ * Edge length of a batching chunk, metres.
+ *
+ * Raised from 250. Chunking exists so the frustum culler can reject geometry, and that is
+ * worth paying draw calls for when the geometry is heavy. Roadside furniture is not: one
+ * driving frame of Borbera Sprint submits 31k triangles of landmarks across what used to be
+ * 208 separate draws — 150 triangles per call. Culling that finely saves triangles nobody
+ * was struggling with and spends the resource that actually stalls a laptop. Bigger chunks
+ * mean a few more triangles drawn off-screen and far fewer calls.
+ */
+const DEFAULT_CHUNK_SIZE = 600;
 
 /** Below this many meshes a bucket is not worth merging. */
 const MIN_BUCKET_SIZE = 2;
@@ -32,6 +41,8 @@ interface Candidate {
   castShadow: boolean;
   receiveShadow: boolean;
   renderOrder: number;
+  /** The prop's own colour, baked into vertices at merge time. See `materialSignature`. */
+  tint: THREE.Color | null;
 }
 
 /**
@@ -46,15 +57,50 @@ interface Candidate {
  * guardrail posts carried a thousand distinct material objects and never merged. Two
  * materials that would rasterise identically must land in the same bucket.
  */
+/**
+ * True when a material's colour can be moved into the vertices instead of the uniform.
+ *
+ * Anything with a texture is excluded: `map` multiplies against `color`, so folding the
+ * colour into vertex colours would change how it composites. Everything the furniture and
+ * hamlet builders produce is untextured.
+ */
+/** Snap to the nearest tenth — see the roughness note in `materialSignature`. */
+function quantise(v: number): number {
+  return Math.round(v * 10) / 10;
+}
+
+function canTintByVertex(m: THREE.Material): boolean {
+  const anyMat = m as THREE.MeshStandardMaterial;
+  return !!anyMat.color && !anyMat.map && !anyMat.vertexColors;
+}
+
 function materialSignature(m: THREE.Material): string {
   const anyMat = m as THREE.MeshStandardMaterial & THREE.MeshBasicMaterial;
   const parts = [
     m.type,
-    anyMat.color ? anyMat.color.getHexString() : "-",
+    // COLOUR IS DELIBERATELY ABSENT when it can be carried per-vertex.
+    //
+    // Including it meant every distinct colour was its own bucket and therefore its own
+    // draw call, which is what the batcher exists to avoid. Measured on one driving frame
+    // of Borbera Sprint: the landmark group alone cost 416 draw calls for 31k triangles —
+    // 75 triangles per call — because a hamlet deals out six wall colours, five roof
+    // colours, five shutter colours plus doors, windows, plinths and chimneys, and kerbs
+    // come in red and white. Baking the colour into a `color` attribute and sharing one
+    // vertexColors material per REMAINING signature collapses all of those into a handful
+    // of draws. Draw-call count is the thing a browser on a laptop actually chokes on;
+    // 950 per frame is 57,000 a second of driver overhead.
+    canTintByVertex(m) ? "vc" : anyMat.color ? anyMat.color.getHexString() : "-",
     anyMat.map ? anyMat.map.uuid : "-",
     anyMat.emissive ? anyMat.emissive.getHexString() : "-",
-    anyMat.roughness !== undefined ? anyMat.roughness.toFixed(3) : "-",
-    anyMat.metalness !== undefined ? anyMat.metalness.toFixed(3) : "-",
+    // Quantised to 0.1. Roughness is authored per prop by eye — 0.96 for a stone plinth,
+    // 0.9 for stucco, 0.85 for a roof, 0.92 for a boulder — and every distinct value was a
+    // separate bucket and therefore a separate draw call, for a difference in the specular
+    // lobe that nobody can see at 80 km/h. Snapping to the nearest tenth merges them. This
+    // is a deliberate, visible-in-principle approximation traded for draw calls; the
+    // canonical material below is built with the SNAPPED value so a batch and a lone prop
+    // that share a signature also share an appearance.
+    anyMat.roughness !== undefined ? quantise(anyMat.roughness).toFixed(1) : "-",
+    anyMat.metalness !== undefined ? quantise(anyMat.metalness).toFixed(1) : "-",
     m.transparent ? "T" : "O",
     m.opacity.toFixed(3),
     String(m.side),
@@ -72,7 +118,19 @@ function canonicalMaterial(m: THREE.Material): { key: string; material: THREE.Ma
   const key = materialSignature(m);
   let mat = canonicalMaterials.get(key);
   if (!mat) {
-    mat = m;
+    if (canTintByVertex(m)) {
+      // One shared white vertexColors material stands in for every colour that shared this
+      // signature. Cloned rather than mutated: the caller's material object may still be
+      // referenced by the un-batched source group.
+      const tinted = m.clone() as THREE.MeshStandardMaterial;
+      tinted.vertexColors = true;
+      tinted.color = new THREE.Color(0xffffff);
+      if (tinted.roughness !== undefined) tinted.roughness = quantise(tinted.roughness);
+      if (tinted.metalness !== undefined) tinted.metalness = quantise(tinted.metalness);
+      mat = tinted;
+    } else {
+      mat = m;
+    }
     canonicalMaterials.set(key, mat);
   }
   return { key, material: mat };
@@ -82,13 +140,47 @@ function attributeSignature(geo: THREE.BufferGeometry): string {
   return Object.keys(geo.attributes).sort().join(",");
 }
 
+/**
+ * Brings one candidate's geometry up to the attribute set a merged batch carries:
+ * position, normal, uv and color, with the prop's own colour written into every vertex.
+ *
+ * Without this, two props that differ only in whether their geometry happens to carry `uv`
+ * — a BoxGeometry does, a hand-built BufferGeometry like the hamlet gable roof does not —
+ * land in different buckets and cost a draw call each.
+ */
+function normalizeForMerge(geo: THREE.BufferGeometry, tint: THREE.Color | null): THREE.BufferGeometry {
+  const g = geo.index ? geo.toNonIndexed() : geo.clone();
+  const count = g.attributes.position.count;
+
+  if (!g.attributes.normal) g.computeVertexNormals();
+  if (!g.attributes.uv) {
+    g.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+  }
+  if (tint) {
+    const colors = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      colors[i * 3] = tint.r;
+      colors[i * 3 + 1] = tint.g;
+      colors[i * 3 + 2] = tint.b;
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  }
+  // Anything else a stray geometry brought along would misalign the concatenation.
+  for (const name of Object.keys(g.attributes)) {
+    if (name !== "position" && name !== "normal" && name !== "uv" && name !== "color") {
+      g.deleteAttribute(name);
+    }
+  }
+  return g;
+}
+
 function mergeBucket(bucket: Candidate[]): THREE.BufferGeometry | null {
   const parts: THREE.BufferGeometry[] = [];
 
   for (const c of bucket) {
     // Non-indexed keeps the concatenation trivial and correct; it costs vertices, not
     // triangles, and triangles are what the frame budget is measured in.
-    const g = c.geometry.index ? c.geometry.toNonIndexed() : c.geometry.clone();
+    const g = normalizeForMerge(c.geometry, c.tint);
     g.applyMatrix4(c.matrixWorld);
     parts.push(g);
   }
@@ -139,7 +231,13 @@ export function batchStaticGroup(source: THREE.Group, chunkSize: number = DEFAUL
     const cx = Math.floor(p.x / chunkSize);
     const cz = Math.floor(p.z / chunkSize);
     const { key: matKey, material } = canonicalMaterial(mesh.material);
-    const key = `${cx}|${cz}|${matKey}|${attributeSignature(mesh.geometry)}`;
+    const tint = canTintByVertex(mesh.material as THREE.Material)
+      ? (mesh.material as THREE.MeshStandardMaterial).color.clone()
+      : null;
+    // Geometry attribute sets are normalised at merge time when the colour is carried per
+    // vertex, so they no longer need to match up front — which is what used to split a
+    // BoxGeometry (has uv) from a hand-built one (does not) into separate draws.
+    const key = `${cx}|${cz}|${matKey}|${tint ? "norm" : attributeSignature(mesh.geometry)}`;
 
     const entry: Candidate = {
       geometry: mesh.geometry,
@@ -148,6 +246,7 @@ export function batchStaticGroup(source: THREE.Group, chunkSize: number = DEFAUL
       castShadow: mesh.castShadow,
       receiveShadow: mesh.receiveShadow,
       renderOrder: mesh.renderOrder,
+      tint,
     };
 
     const list = buckets.get(key);
@@ -161,7 +260,9 @@ export function batchStaticGroup(source: THREE.Group, chunkSize: number = DEFAUL
   for (const bucket of buckets.values()) {
     if (bucket.length < MIN_BUCKET_SIZE) {
       const c = bucket[0];
-      const g = c.geometry.clone();
+      // Still normalised: the canonical material for this signature expects vertex colours,
+      // and a lone prop handed the raw geometry would render white.
+      const g = c.tint ? normalizeForMerge(c.geometry, c.tint) : c.geometry.clone();
       g.applyMatrix4(c.matrixWorld);
       const m = new THREE.Mesh(g, c.material);
       m.castShadow = c.castShadow;
