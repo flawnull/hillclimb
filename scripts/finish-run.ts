@@ -23,7 +23,9 @@
 import { chromium, type Browser } from "playwright";
 
 const BASE = process.env.SMOKE_BASE_URL ?? "http://localhost:3001";
-/** Generous: a clean run is ~170 s, and a few off-road respawns add 8 s each. */
+/** Generous: a clean run is ~280 s under SIM_VERSION 13 (cornering scrubs speed now, where
+ *  it used to add it, so the conservative driver below is a good deal slower than the ~170 s
+ *  it managed before), and a few off-road respawns add 8 s each. */
 const RUN_TIMEOUT_MS = 420_000;
 
 const failures: string[] = [];

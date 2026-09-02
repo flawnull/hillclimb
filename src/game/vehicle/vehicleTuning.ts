@@ -80,8 +80,30 @@
  *   straights between corners. Straights are now 90-160 m and drop depths 60-280 m rather
  *   than up to 450: depth beyond the verge is invisible from the car but pulls ground out
  *   from under the carriageway, forcing viaduct piers and costing geometry for nothing.
+ *
+ * 12 -> 13: the car manufactured kinetic energy whenever it turned. Velocity is carried in
+ *   world coordinates, decomposed into body components against the OLD heading, integrated,
+ *   and recomposed against the NEW one — and that recomposition is itself a rotation, so the
+ *   body-frame derivative must carry BOTH rotating-frame terms to cancel it. Only the
+ *   lateral one (`- yawRate * vForward`) was present; the forward one
+ *   (`+ yawRate * vLateral`) was missing. The pair together is a pure rotation and preserves
+ *   speed, half of it does work on the car every step, and in a drift the sign is positive
+ *   and compounds at 60 Hz. Measured with the throttle fully released and nothing but
+ *   steering input: 30 km/h became 74.6 km/h in five seconds, and 60 km/h became 365.8.
+ *
+ *   Closing that leak exposed what it had been masking: the target yaw rate was purely
+ *   kinematic, `(v / wheelbase) * tan(steer)`, with no grip limit at all. At 60 km/h on full
+ *   lock it demanded 4.2 rad/s — about 240 deg/s — so the body pivoted far faster than any
+ *   tyre could turn it, the slip angle passed 80 degrees within a second and the car scrubbed
+ *   sideways to a standstill. The energy the integrator was inventing had been papering over
+ *   it. The target is now capped at what the tyres can actually deliver, `(gripLimit / mass)
+ *   / v` with 15% headroom, computed from the grip BEFORE the handbrake reduction so that
+ *   deliberate oversteer still rotates the car more rather than less.
+ *
+ *   Lap times under the old handling are not comparable: cornering now scrubs speed instead
+ *   of adding it.
  */
-export const SIM_VERSION = 12;
+export const SIM_VERSION = 13;
 
 /*
  * Version history — append a line whenever this is bumped.

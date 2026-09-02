@@ -234,4 +234,121 @@ describe("Vehicle Physics & Dynamics", () => {
       });
     }
   });
+
+  /**
+   * ENERGY CONSERVATION UNDER ROTATION.
+   *
+   * The suite above measures acceleration, braking, gearing, grip and perks — every one of
+   * them in a straight line, or with steering held only long enough to read a yaw rate. None
+   * of them asked the one question that matters once the car is turning: where does the
+   * energy come from?
+   *
+   * It came from the integrator. Velocity is carried in world coordinates, decomposed into
+   * body components against the OLD heading, integrated, then recomposed against the NEW
+   * one — and that recomposition is a rotation, so the body-frame derivative has to carry
+   * both rotating-frame terms to cancel it. Only `- yawRate * vForward` was there;
+   * `+ yawRate * vLateral` was missing. Half a rotation is not a rotation: it does work on
+   * the car every step, and in a drift the sign is positive and compounds at 60 Hz. With the
+   * throttle fully released and nothing but steering input, 30 km/h became 74.6 km/h in five
+   * seconds and 60 km/h became 365.8.
+   *
+   * The test is the physics, not the code: with no throttle, no downhill and no wind, a car
+   * cannot end a manoeuvre faster than it started it, whatever the steering is doing.
+   */
+  describe("Cornering cannot create energy", () => {
+    for (const car of cars) {
+      for (const [label, steer, handbrake] of [
+        ["full lock", 1.0, false],
+        ["half lock", 0.5, false],
+        ["full lock with the handbrake", 1.0, true],
+      ] as const) {
+        it(`${car.name}: coasting through a turn at ${label} never gains speed`, () => {
+          const vehicle = new VehicleModel(car.id);
+          const ground = makeGround("asphalt", 0); // dead level: no gravity to draw on
+
+          // Get up to about 60 km/h in a straight line first.
+          const accel: InputState = { steer: 0, throttle: 1, brake: 0, handbrake: false };
+          let guard = 0;
+          while (vehicle.state.speedKmh < 60 && guard++ < 6000) {
+            vehicle.step(PHYSICS_DT, accel, ground, false);
+          }
+          // Let the throttle actually close before measuring. Pedals ramp at
+          // PEDAL_RAMP_RATE, so the engine is still pushing for about a tenth of a second
+          // after the input goes to zero; that is real, and not what this test is about.
+          const coast: InputState = { steer: 0, throttle: 0, brake: 0, handbrake: false };
+          for (let i = 0; i < 30; i++) vehicle.step(PHYSICS_DT, coast, ground, false);
+
+          const entrySpeed = vehicle.state.speedKmh;
+          assert.ok(entrySpeed >= 55, `${car.id}: could not reach a corner-entry speed`);
+
+          // Now turn, for eight seconds, with the throttle still shut.
+          const turn: InputState = { steer, throttle: 0, brake: 0, handbrake };
+          let peak = vehicle.state.speedKmh;
+          for (let i = 0; i < 480; i++) {
+            vehicle.step(PHYSICS_DT, turn, ground, false);
+            peak = Math.max(peak, vehicle.state.speedKmh);
+          }
+
+          // A hair of slack for the integrator's own first step, nothing more. The defect
+          // this guards against multiplied the speed six-fold.
+          assert.ok(
+            peak <= entrySpeed + 0.5,
+            `${car.id}: coasting through a ${label} turn took the car from ${entrySpeed.toFixed(1)} ` +
+              `to ${peak.toFixed(1)} km/h with the throttle shut — the integrator is doing work on it`
+          );
+          assert.ok(
+            vehicle.state.speedKmh < entrySpeed,
+            `${car.id}: eight seconds of cornering left the car no slower than it entered ` +
+              `(${entrySpeed.toFixed(1)} -> ${vehicle.state.speedKmh.toFixed(1)} km/h)`
+          );
+        });
+      }
+    }
+
+    /**
+     * The yaw rate the steering geometry asks for grows without bound with speed — at 60 km/h
+     * on full lock the kinematic term demands about 240 deg/s — but the tyres decide what the
+     * car actually does. A steady turn needs `v * yawRate` of lateral acceleration and the
+     * tyres supply at most `gripLimit / mass`, so the rate is bounded by `(gripLimit/mass)/v`.
+     * Without that bound the body pivoted far faster than the velocity vector could follow,
+     * the slip angle passed 80 degrees within a second, and the car scrubbed sideways to a
+     * standstill; the energy the integrator was inventing had been hiding it.
+     */
+    for (const car of cars) {
+      it(`${car.name}: yaw rate stays within what the tyres can deliver`, () => {
+        const vehicle = new VehicleModel(car.id);
+        const ground = makeGround("asphalt", 0);
+        const accel: InputState = { steer: 0, throttle: 1, brake: 0, handbrake: false };
+        let guard = 0;
+        while (vehicle.state.speedKmh < 60 && guard++ < 6000) {
+          vehicle.step(PHYSICS_DT, accel, ground, false);
+        }
+
+        const turn: InputState = { steer: 1, throttle: 0.4, brake: 0, handbrake: false };
+        let worstExcess = 0;
+        let worstAt = "";
+        for (let i = 0; i < 300; i++) {
+          vehicle.step(PHYSICS_DT, turn, ground, false);
+          const v = Math.max(2.0, Math.abs(vehicle.state.vForward));
+          // Peak lateral acceleration available, mirroring VehicleModel's gripLimit: grip *
+          // downforce * 0.95 g. Downforce is capped at +25%; using the cap keeps this an
+          // upper bound rather than a restatement of the model's own arithmetic.
+          const maxLatAccel = car.grip * 1.25 * 9.81 * 0.95;
+          // The model allows 15% headroom over the steady-state bound for transient rotation,
+          // and yaw takes a moment to settle after a step input, so allow a further margin.
+          const cap = (maxLatAccel / v) * 1.15 * 1.35;
+          const excess = Math.abs(vehicle.state.yawRate) - cap;
+          if (excess > worstExcess) {
+            worstExcess = excess;
+            worstAt = `${(i / 60).toFixed(2)}s at ${vehicle.state.speedKmh.toFixed(1)} km/h ` +
+              `(yaw ${vehicle.state.yawRate.toFixed(2)} rad/s, cap ${cap.toFixed(2)})`;
+          }
+        }
+        assert.ok(
+          worstExcess <= 0,
+          `${car.id}: yaw rate exceeded the grip-limited bound by ${worstExcess.toFixed(2)} rad/s — ${worstAt}`
+        );
+      });
+    }
+  });
 });

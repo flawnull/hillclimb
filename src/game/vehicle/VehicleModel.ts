@@ -332,6 +332,8 @@ export class VehicleModel {
     // 5. Lateral / Cornering Forces
     const downforce = 1.0 + Math.min(DOWNFORCE_K * speed * speed, MAX_DOWNFORCE_BOOST);
     let gripLimit = car.grip * surfaceGrip * downforce * (car.mass * GRAVITY * 0.95);
+    /** Grip before the handbrake reduction — the yaw cap below is built from this. */
+    const gripLimitBeforeHandbrake = gripLimit;
 
     if (s.handbrake) {
       gripLimit *= HANDBRAKE_GRIP_MUL;
@@ -363,8 +365,26 @@ export class VehicleModel {
       targetSteerAngle += headingDiff * STEERING_ASSIST_BLEND;
     }
 
-    // Target yaw rate based on Ackerman-like kinematic curvature
-    const targetYawRate = (vForward / car.wheelbase) * detTan(targetSteerAngle);
+    // Target yaw rate based on Ackerman-like kinematic curvature, LIMITED BY GRIP.
+    //
+    // The kinematic term alone is what the steering geometry asks for, and it grows without
+    // bound with speed: at 60 km/h with full lock it demands 4.2 rad/s, about 240 deg/s, a
+    // rate no tyre could ever deliver. The car duly pivoted to that rate while its velocity
+    // carried straight on, so the slip angle reached 80 degrees within a second and the
+    // whole car scrubbed sideways to a halt. This was invisible while the integrator was
+    // feeding energy back in (see the Coriolis note below); closing that leak exposed it.
+    //
+    // A steady turn needs lateral acceleration `v * w`, and the tyres can supply at most
+    // `gripLimit / mass`, so `w <= (gripLimit / mass) / v`. The cap is computed from the
+    // grip BEFORE the handbrake reduction and given a little headroom, because a car can
+    // transiently rotate faster than its steady-state limit — and because the handbrake is
+    // supposed to rotate the car MORE, not less. Deliberate oversteer still arrives through
+    // HANDBRAKE_YAW_MUL and the locked-axle impulse below, which act on top of this.
+    const YAW_CAP_HEADROOM = 1.15;
+    const maxLatAccel = (gripLimitBeforeHandbrake / car.mass) * YAW_CAP_HEADROOM;
+    const yawCap = maxLatAccel / Math.max(2.0, Math.abs(vForward));
+    const kinematicYawRate = (vForward / car.wheelbase) * detTan(targetSteerAngle);
+    const targetYawRate = Math.max(-yawCap, Math.min(yawCap, kinematicYawRate));
     let yawBlend = (targetYawRate - s.yawRate) * YAW_RESPONSE * dt;
 
     if (s.handbrake) {
@@ -379,7 +399,28 @@ export class VehicleModel {
     s.heading = detNormalizeAngle(s.heading + s.yawRate * dt);
 
     // 7. Integrate Velocity in Local Coordinates (with rotating body-frame centripetal term)
-    let newVForward = vForward + a_longitudinal * dt;
+    //
+    // BOTH rotating-frame terms, not just the lateral one.
+    //
+    // Velocity is carried in world coordinates, decomposed into body components against the
+    // OLD heading here, integrated, and recomposed below against the NEW heading. That
+    // recomposition is itself a rotation of the velocity vector by `yawRate * dt`, so the
+    // body-frame derivative has to cancel it: writing R for body-to-world and J for the
+    // body-frame rotation generator, `R(h + w dt)(u + f dt) ~ R(h)(u + f dt + w dt J u)`, so
+    // the world acceleration only equals the intended `a` if `f = a - w J u`. With this
+    // model's basis (forward = (sin h, cos h), right = (cos h, -sin h)) that generator is
+    // `J u = (-u_lateral, u_forward)`, giving `+ yawRate * vLateral` on the forward axis and
+    // `- yawRate * vForward` on the lateral one.
+    //
+    // Only the lateral half was here. The pair together is a pure rotation and preserves
+    // speed; half of it is not, and it does work on the car every step: to first order the
+    // speed changes by `-2 * vForward * vLateral * yawRate * dt` per step, which in a drift
+    // (nose rotated into the corner ahead of the velocity, so `vLateral` opposes `yawRate`)
+    // is POSITIVE and compounds at 60 Hz. Measured on the Panda GT with the throttle fully
+    // released and nothing but steering input: 30 km/h became 74.6 km/h in five seconds, and
+    // 60 km/h became 365.8. That is the reported "drifting multiplies your speed" — the car
+    // was manufacturing kinetic energy out of the integrator.
+    let newVForward = vForward + (a_longitudinal + vLateral * s.yawRate) * dt;
 
     // Reverse is speed-limited. Nothing capped it before, so holding the brake accelerated
     // the car backwards indefinitely.
