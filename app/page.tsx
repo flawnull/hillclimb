@@ -28,18 +28,11 @@ const GameCanvas = dynamic(
   () => import("@/ui/GameCanvas"),
   {
     ssr: false,
-    loading: () => (
-      // Frosted rather than opaque: the HUD is already mounted behind this, and a flat slate
-      // panel made the wait look like a broken page. Blurring what is behind reads as the
-      // stage being prepared underneath.
-      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950/70 backdrop-blur-xl text-white font-mono">
-        <div className="w-12 h-12 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mb-4" />
-        <div className="text-sm tracking-widest text-amber-400 font-bold uppercase">
-          Generating Mountain Stage...
-        </div>
-        <div className="text-xs text-slate-500 mt-1">Val Borbera Hillclimb</div>
-      </div>
-    ),
+    // No visible fallback here. This slot only covers the canvas area, and the HUD is a
+    // SIBLING of it in the layout — so a panel drawn here left every button, the timer and
+    // the altimeter fully sharp and apparently usable while the stage was still building.
+    // The loading screen is `LoadingVeil` below, which covers the whole page instead.
+    loading: () => <div className="w-full h-full" />,
   }
 );
 
@@ -62,6 +55,12 @@ export default function HomePage() {
   const renderStateRef = useRef<EngineRenderState>(engine.update(0));
 
   const [hudState, setHudState] = useState<EngineRenderState>({ ...renderStateRef.current });
+
+  // Cleared by the first frame the renderer actually draws — see handleStateUpdate. That is
+  // the honest signal for "the stage is ready": the canvas chunk has loaded, the terrain,
+  // road and scenery are built, and something is on screen. Keyed on nothing else, so it
+  // cannot get stuck if a build is slow.
+  const [sceneReady, setSceneReady] = useState<boolean>(false);
 
   // Screen Wake Lock on mobile during active gameplay (§9.2)
   useWakeLock(hudState.runState);
@@ -107,8 +106,15 @@ export default function HomePage() {
 
   // Throttled HUD update callback from renderer loop (~20 Hz)
   const lastHudUpdate = useRef(0);
+  const sceneReadyRef = useRef(false);
   const handleStateUpdate = useCallback((s: EngineRenderState) => {
     renderStateRef.current = s;
+    // Once only: this runs on every rendered frame, and React would otherwise be handed a
+    // state update sixty times a second to bail out of.
+    if (!sceneReadyRef.current) {
+      sceneReadyRef.current = true;
+      setSceneReady(true);
+    }
     const now = performance.now();
     if (now - lastHudUpdate.current > 48) {
       lastHudUpdate.current = now;
@@ -228,6 +234,24 @@ export default function HomePage() {
             handbrake bottom-centre. Placed into the grid via display:contents. */}
         <TouchControls engine={engine} />
       </div>
+
+      {/* Loading veil — the WHOLE page, not just the canvas.
+          Fixed and above the HUD grid (z-20) and the tap-to-start prompt (z-30), so the
+          controls behind it are genuinely blurred and genuinely inert rather than merely
+          unclickable: the veil itself takes the pointer events. */}
+      {!sceneReady && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950/60 backdrop-blur-xl text-white font-mono"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="w-12 h-12 border-4 border-amber-500/20 border-t-amber-500 rounded-full animate-spin mb-4" />
+          <div className="text-sm tracking-widest text-amber-400 font-bold uppercase">
+            Generating Mountain Stage...
+          </div>
+          <div className="text-xs text-slate-500 mt-1">Val Borbera Hillclimb</div>
+        </div>
+      )}
 
       {/* Stage Selection Modal */}
       {showStageModal && (

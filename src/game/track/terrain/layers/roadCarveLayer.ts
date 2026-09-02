@@ -91,9 +91,70 @@
  */
 
 import { RoadHit, RoadIndex } from "../roadIndex";
-import { profileHeightAt } from "./roadProfile";
+import { profileHeightAt, ROAD_CLEARANCE, VERGE_WIDTH } from "./roadProfile";
 
 export const CARVE_RADIUS = 90;
+
+/**
+ * Steepest ground the carve will let the road stand on, metres down per metre out from the
+ * edge of the built road. Ground lower than this beside a carriageway is what "the road is
+ * floating" looks like from the car.
+ *
+ * A plain minimum over every nearby road's lateral profile is a correct CEILING — it keeps
+ * the ground under every tier — but it says nothing about how high the ground is allowed to
+ * be, so one road sample whose drop happens to point at a neighbouring tier pulls the ground
+ * out from under that tier as well. Measured on Salita di Cosola: at s = 1828 the winning
+ * proposal came from a sample 74 m away and 28 m LOWER, whose exposed side faces uphill
+ * toward this one; it put the ground 84 m below a carriageway that its own stage marks as
+ * unexposed. The road there is supported by nothing, and the embankment builder then tried
+ * to carry a kilometre of it on viaduct.
+ *
+ * The support constraint below fixes that without touching the ceiling: near any road, the
+ * ground may not sit deeper than a MAX_BANK_SLOPE hillside from that road's own edge. It is
+ * the same slope the exposed drop profile itself now uses, so it never fights the intended
+ * drop — it only bites where some OTHER tier's profile reached across and dug underneath.
+ */
+export const MAX_BANK_SLOPE = 1.15;
+
+/**
+ * Steepest bank the ground may CLIMB away from a road, metres up per metre out. This is the
+ * hard clearance ceiling, relaxed with distance: right at the road it is exactly
+ * `y - ROAD_CLEARANCE`, and it opens up quickly enough that a genuine stacked switchback —
+ * where two tiers are closer together horizontally than their height difference — resolves
+ * in favour of keeping the ground under the LOWER road, which is the only choice a
+ * single-valued heightfield has.
+ */
+const MAX_CUT_SLOPE = 3.0;
+
+/**
+ * How far beyond the carriageway edge the hard ceiling stays flat at `y - ROAD_CLEARANCE`,
+ * metres — i.e. where the ceiling may not start relaxing upward at all.
+ *
+ * Without it the ceiling relaxed from the verge outward, and since the support floor is
+ * clamped to the ceiling, ground just past the verge could be lifted to slightly ABOVE the
+ * road surface: measured on Borbera Sprint, 0.24 m below the road at lat 4.9 where the
+ * guarantee is 0.25 m. This is the same band the deleted clearance clamp used to cover —
+ * `max(halfWidth) + VERGE_WIDTH = 6.6 m` across every stage — so holding the ceiling flat
+ * across it restores the guarantee by construction rather than by tolerance.
+ */
+const CEIL_FLAT = 6.6;
+
+/**
+ * How far the two constraints below relax as a hit's falloff weight drops to zero, metres.
+ *
+ * Both are combined across hits by min/max, so a hit appearing or disappearing at the
+ * CARVE_RADIUS boundary would be a height discontinuity if it happened to be the extremum at
+ * that moment. Adding `SLACK * (1 - w)` to the ceiling and subtracting it from the floor
+ * makes a departing hit maximally relaxed exactly when it leaves. At w = 0 a hit is 90 m
+ * away, so its raw ceiling already sits ~240 m above its own road and its raw floor ~90 m
+ * below; another 60 m on top of that puts both far outside anything a stage's relief can
+ * reach within one carve radius, which is what makes the departure harmless.
+ *
+ * Linear in `(1 - w)` rather than the `(1/w - 1)` that first stood here: that form diverges,
+ * which makes departure airtight but gives the constraint an unbounded gradient near the
+ * radius edge, and the field's Lipschitz bound is a property worth keeping provable.
+ */
+const CONTINUITY_SLACK = 60;
 
 /**
  * Radius within which a hit's falloff weight is exactly 1, not just close to it. This
@@ -198,6 +259,10 @@ export function carveFromHits(
   // dependence on how many hits are nearby. See the module doc for why this replaced a
   // pairwise-folded soft-min, which compounded a bias proportional to candidate count.
   let height = land;
+  /** Hard clearance ceiling across all hits — see MAX_CUT_SLOPE. */
+  let ceiling = Infinity;
+  /** Support floor across all hits — see MAX_BANK_SLOPE. */
+  let support = -Infinity;
 
   for (const h of hits) {
     // C1 falloff with a flat core: exactly 1 within CORE_RADIUS, 0 at CARVE_RADIUS.
@@ -217,7 +282,35 @@ export function carveFromHits(
     const proposed = profileHeightAt(h.sample, h.lat);
     const blended = land + (proposed - land) * w;
     if (blended < height) height = blended;
+
+    // Ceiling and support, both measured from the EDGE of the built road rather than from
+    // the centreline, and both faded to inert (infinite) at w = 0 so neither can jump when
+    // a hit crosses CARVE_RADIUS.
+    if (w > 0) {
+      // Measured from `dist` (the distance to the sample itself), NOT from `lat`. A sample
+      // 90 m further ALONG a straight road has lat ~ 0 while being at the very edge of the
+      // query radius; keyed on lat its constraint would enter the min/max at nearly full
+      // strength the moment it came into range, which is a height discontinuity of tens of
+      // metres. `dist` is what actually goes to zero only when the point is on that sample.
+      const dd = Math.max(0, h.dist - h.sample.halfWidth - VERGE_WIDTH);
+      const slack = CONTINUITY_SLACK * (1 - w);
+      const top = h.sample.y - ROAD_CLEARANCE;
+      const c = top + MAX_CUT_SLOPE * Math.max(0, h.dist - h.sample.halfWidth - CEIL_FLAT) + slack;
+      if (c < ceiling) ceiling = c;
+      const f = top - MAX_BANK_SLOPE * dd - slack;
+      if (f > support) support = f;
+    }
   }
+
+  // Raise the ground back up to what the nearby road can actually stand on, but never above
+  // the clearance ceiling: where two tiers are stacked closer than MAX_CUT_SLOPE allows the
+  // constraints genuinely cannot both hold, and the ceiling has to win — a heightfield can
+  // only be under the lower road there. On a ribbon (dd = 0, w = 1) the ceiling is exactly
+  // `y - ROAD_CLEARANCE`, so the clearance guarantee is now enforced by construction here
+  // as well as by the faded minimum above.
+  const floor = support < ceiling ? support : ceiling;
+  if (height < floor) height = floor;
+  if (height > ceiling) height = ceiling;
 
   return { height, nearestDist };
 }

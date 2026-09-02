@@ -114,35 +114,43 @@ export class TerrainSystem {
 
     /** Depth of the deck edge shown beneath the carriageway on a viaduct span, metres. */
     const DECK_FASCIA = 1.1;
-    /** Emit a pier every this many kept samples. Sparse on purpose: a pier every few metres
-     *  reads as scaffolding rather than as a viaduct. */
-    const PIER_EVERY = 9;
+    /** Distance between piers along a viaduct span, metres. Sparse on purpose: a pier every
+     *  few metres reads as scaffolding rather than as a viaduct. */
+    const PIER_SPACING_M = 34;
+
+    /**
+     * Structure shorter than this is a stub, and stubs are what the eye picks out.
+     *
+     * Classifying each node independently meant the exposure crossing MIN_EXPOSED on rolling
+     * ground started and stopped the wall repeatedly: measured on Borbera Sprint, half the
+     * runs were under 40 m and the shortest was 8 m. On screen that is not a retaining wall,
+     * it is a row of detached slabs standing in the grass beside the road. Runs below this
+     * length are dropped, and short gaps between runs are closed, so what remains is either a
+     * piece of structure long enough to read as one or nothing at all.
+     */
+    const MIN_RUN_M = 26;
+    /** A dip this short does not warrant breaking a wall in two. */
+    const MAX_GAP_M = 22;
+
+    const nodeSpacing = (this.spline.totalLength / Math.max(1, samples.length - 1)) * STEP;
 
     const verts: number[] = [];
     const indices: number[] = [];
     const piers: { x: number; z: number; top: number; bottom: number }[] = [];
 
+    /** 0 = road meets the ground, 1 = retaining wall, 2 = viaduct deck on piers. */
+    type Kind = 0 | 1 | 2;
+    interface Node {
+      x: number;
+      z: number;
+      top: number;
+      groundY: number;
+      kind: Kind;
+    }
+
     for (const side of [-1, 1] as const) {
-      let strip: { x: number; z: number; top: number; bottom: number }[] = [];
-
-      const flush = () => {
-        if (strip.length >= 2) {
-          const base = verts.length / 3;
-          for (const p of strip) {
-            verts.push(p.x, p.top, p.z);
-            verts.push(p.x, p.bottom, p.z);
-          }
-          for (let r = 0; r < strip.length - 1; r++) {
-            const a = base + r * 2;
-            const b = base + (r + 1) * 2;
-            // Wound so the wall faces outward from the road on this side.
-            if (side > 0) indices.push(a, a + 1, b, b, a + 1, b + 1);
-            else indices.push(a, b, a + 1, a + 1, b, b + 1);
-          }
-        }
-        strip = [];
-      };
-
+      // --- Pass 1: classify every node on its own ------------------------------------
+      const nodes: Node[] = [];
       for (let i = 0; i < samples.length; i += STEP) {
         const smp = samples[i];
         // Outer edge of the verge — where the built road actually ends.
@@ -150,55 +158,117 @@ export class TerrainSystem {
         const x = smp.x + smp.normalX * lat;
         const z = smp.z + smp.normalZ * lat;
 
-        const roadEdgeY = smp.y - 0.28;
+        const top = smp.y - 0.28;
         const groundY = this.field.heightAt(x, z);
-        const exposed = roadEdgeY - groundY;
-
-        if (exposed < MIN_EXPOSED) {
-          // Road meets the ground here; end the current wall rather than bridging a gap.
-          flush();
-          continue;
-        }
+        const exposed = top - groundY;
 
         // Beyond the wall's reach the road is not on an embankment at all — it is on a
-        // viaduct. This is the stacked-switchback case: a single-valued heightfield cannot be
-        // beneath the upper leg AND clear of the lower one, so the terrain correctly follows
-        // the lower road and the upper road is carried by structure instead. A fascia below
-        // the deck plus piers down to the ground is what a real mountain road does here, and
-        // it is the only thing that can span a gap of hundreds of metres.
-        if (exposed > MAX_WALL) {
-          strip.push({ x, z, top: roadEdgeY, bottom: roadEdgeY - DECK_FASCIA });
-          if (i % (STEP * PIER_EVERY) === 0) {
-            // A pier must land on the ground, and must not pass through a road on its way
-            // down. Where a switchback's lower leg runs beneath this span, a column dropped
-            // from the deck would spear straight through that carriageway. Real viaducts
-            // simply span those bays without a pier, so this one is skipped rather than
-            // shortened — a pier stopping in mid-air above the lower road looks worse than
-            // no pier at all.
-            const deckUnderside = roadEdgeY - DECK_FASCIA;
-            const blocked = this.field.index
-              .query(x, z, 40)
-              .some(
-                (h) =>
-                  Math.abs(h.lat) <= h.sample.halfWidth + 2.0 &&
-                  h.sample.y < deckUnderside - 1.0 &&
-                  h.sample.y > groundY + 1.0
-              );
-            if (!blocked) {
-              piers.push({ x, z, top: deckUnderside, bottom: groundY });
-            }
-          }
-          continue;
+        // viaduct. This is the stacked-switchback case: a single-valued heightfield cannot
+        // be beneath the upper leg AND clear of the lower one, so the terrain correctly
+        // follows the lower road and the upper road is carried by structure instead.
+        const kind: Kind = exposed < MIN_EXPOSED ? 0 : exposed > MAX_WALL ? 2 : 1;
+        nodes.push({ x, z, top, groundY, kind });
+      }
+
+      // --- Pass 2: close short gaps, then drop short runs -----------------------------
+      const runs = (): { from: number; to: number; kind: Kind }[] => {
+        const out: { from: number; to: number; kind: Kind }[] = [];
+        for (let i = 0; i < nodes.length; ) {
+          let j = i;
+          while (j + 1 < nodes.length && nodes[j + 1].kind === nodes[i].kind) j++;
+          out.push({ from: i, to: j, kind: nodes[i].kind });
+          i = j + 1;
+        }
+        return out;
+      };
+
+      for (const r of runs()) {
+        const lengthM = (r.to - r.from + 1) * nodeSpacing;
+        const before = r.from > 0 ? nodes[r.from - 1].kind : 0;
+        const after = r.to + 1 < nodes.length ? nodes[r.to + 1].kind : 0;
+        if (r.kind === 0 && lengthM < MAX_GAP_M && before !== 0 && after !== 0) {
+          // A short patch of ground between two pieces of structure: bridge it rather than
+          // leaving a notch. A wall reads as continuous; a viaduct only where both sides are.
+          const fill: Kind = before === 2 && after === 2 ? 2 : 1;
+          for (let i = r.from; i <= r.to; i++) nodes[i].kind = fill;
+        }
+      }
+
+      for (const r of runs()) {
+        if (r.kind === 0) continue;
+        const lengthM = (r.to - r.from + 1) * nodeSpacing;
+        if (lengthM >= MIN_RUN_M) continue;
+        const before = r.from > 0 ? nodes[r.from - 1].kind : 0;
+        const after = r.to + 1 < nodes.length ? nodes[r.to + 1].kind : 0;
+        // A stub between two walls is a wall; a stub standing on its own is nothing.
+        const demoted: Kind = before === 1 || after === 1 ? 1 : 0;
+        for (let i = r.from; i <= r.to; i++) nodes[i].kind = demoted;
+      }
+
+      // --- Pass 3: emit ----------------------------------------------------------------
+      for (const r of runs()) {
+        if (r.kind === 0) continue;
+
+        // A wall tapers into the ground at each end rather than stopping at a vertical face,
+        // by extending one node past the run with zero height. The viaduct deck does not: it
+        // abuts the embankment or the hillside, which is what a real one does.
+        const strip: { x: number; z: number; top: number; bottom: number }[] = [];
+        const push = (n: Node, bottom: number) => strip.push({ x: n.x, z: n.z, top: n.top, bottom });
+
+        if (r.kind === 1 && r.from > 0) push(nodes[r.from - 1], nodes[r.from - 1].top);
+        for (let i = r.from; i <= r.to; i++) {
+          const n = nodes[i];
+          push(n, r.kind === 2 ? n.top - DECK_FASCIA : Math.max(n.groundY, n.top - MAX_WALL));
+        }
+        if (r.kind === 1 && r.to + 1 < nodes.length) push(nodes[r.to + 1], nodes[r.to + 1].top);
+
+        const base = verts.length / 3;
+        for (const p of strip) {
+          verts.push(p.x, p.top, p.z);
+          verts.push(p.x, p.bottom, p.z);
+        }
+        for (let k = 0; k < strip.length - 1; k++) {
+          const a = base + k * 2;
+          const b = base + (k + 1) * 2;
+          // Wound so the wall faces outward from the road on this side.
+          if (side > 0) indices.push(a, a + 1, b, b, a + 1, b + 1);
+          else indices.push(a, b, a + 1, a + 1, b, b + 1);
         }
 
-        strip.push({
-          x,
-          z,
-          top: roadEdgeY,
-          bottom: Math.max(groundY, roadEdgeY - MAX_WALL),
-        });
+        if (r.kind !== 2) continue;
+
+        // Piers are placed by distance ALONG THIS SPAN, not on a global modulus of the
+        // sample index. A modulus left short spans with a fascia band and no columns under
+        // it — deck edge hanging in the air with nothing holding it up, which is exactly
+        // what the structure exists to avoid showing.
+        let sinceLast = Infinity;
+        for (let i = r.from; i <= r.to; i++) {
+          const n = nodes[i];
+          if (sinceLast < PIER_SPACING_M) {
+            sinceLast += nodeSpacing;
+            continue;
+          }
+          const deckUnderside = n.top - DECK_FASCIA;
+          // A pier must land on the ground, and must not pass through a road on its way
+          // down. Where a switchback's lower leg runs beneath this span, a column dropped
+          // from the deck would spear straight through that carriageway. Real viaducts
+          // simply span those bays without a pier, so this one is skipped rather than
+          // shortened — a pier stopping in mid-air above the lower road looks worse than
+          // no pier at all. The spacing counter is NOT reset on a skip, so the next
+          // unblocked node takes the pier instead of waiting another full span.
+          const blocked = this.field.index
+            .query(n.x, n.z, 40)
+            .some(
+              (h) =>
+                Math.abs(h.lat) <= h.sample.halfWidth + 2.0 &&
+                h.sample.y < deckUnderside - 1.0 &&
+                h.sample.y > n.groundY + 1.0
+            );
+          if (blocked) continue;
+          piers.push({ x: n.x, z: n.z, top: deckUnderside, bottom: n.groundY });
+          sinceLast = nodeSpacing;
+        }
       }
-      flush();
     }
 
     // Piers: a square column from the underside of the deck down to the ground.

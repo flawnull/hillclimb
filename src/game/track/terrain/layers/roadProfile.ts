@@ -29,7 +29,25 @@ export const VERGE_WIDTH = 1.2;
 /** Terrain must sit at least this far below the road surface, everywhere. */
 export const ROAD_CLEARANCE = 0.25;
 
-const DROP_FALLOFF = 0.055;
+/**
+ * Slope of the ground immediately off the verge on an exposed side, metres down per metre
+ * out. Fixed, and deliberately independent of how deep the drop eventually goes.
+ *
+ * This replaces a constant falloff RATE (0.055), which made the near-verge slope
+ * `dropDepth * 0.055` — so a stage declaring a 250 m drop fell 13.75 m for every metre you
+ * stepped off the verge, and was 89 m below the road only 10 m out. Because the carve layer
+ * takes the MINIMUM over every road sample within 90 m, one such sample was enough to pull
+ * the ground out from under a neighbouring tier: measured on Salita di Cosola, the surface
+ * sat 20-130 m below the carriageway three metres off the centreline along most of the
+ * stage, which is what left the road visibly hanging in the air and forced kilometres of
+ * viaduct to carry it.
+ *
+ * A real hillside beside a mountain road falls at something under 45-50 degrees near the
+ * road, however far down the valley eventually is; the remaining depth is reached over
+ * hundreds of metres, which is the valley layer's job, not this profile's. Holding the
+ * near-field slope fixed and letting the asymptote stay at `depth` gives both.
+ */
+const DROP_SLOPE = 1.15;
 const CUT_HEIGHT = 6.0;
 const CUT_SLOPE = 0.42;
 const HILL_FALLOFF = 0.016;
@@ -56,7 +74,9 @@ export function profileHeightAt(s: SplineSample, lat: number): number {
     const declared = s.dropDepth ?? 40;
     const toValleyFloor = Math.max(20, s.altitude - VALLEY_FLOOR_ALT);
     const depth = Math.min(declared, toValleyFloor, MAX_VISIBLE_DROP);
-    const t = 1 - 1 / (1 + dd * DROP_FALLOFF);
+    // Falloff rate chosen per-sample so the slope at the verge is DROP_SLOPE regardless of
+    // depth, while the profile still asymptotes to the full declared drop.
+    const t = 1 - 1 / (1 + (dd * DROP_SLOPE) / depth);
     return vergeBase - depth * t;
   }
 

@@ -647,7 +647,17 @@ describe("HeightField", () => {
     // for the same reason (distance-to-a-set is 1-Lipschitz).
     const wRampMax = 1.5 / (CARVE_RADIUS - CORE_RADIUS_FOR_TEST);
     const landGapBound = maxLandGap * wRampMax;
-    return (maxSlope + landGapBound) * 1.25;
+    // The carve also clamps its result between a support floor and a hard clearance ceiling
+    // (roadCarveLayer.ts, MAX_BANK_SLOPE / MAX_CUT_SLOPE), added so one tier's drop profile
+    // could no longer pull the ground out from under a neighbouring tier. Where either
+    // constraint is the binding one the field follows IT, not the profile, so its own slope
+    // belongs in this bound: the steeper of the two, plus the gradient of the continuity
+    // slack that fades each constraint out at the radius edge. Both constants must track
+    // roadCarveLayer.ts, for the same reason CORE_RADIUS_FOR_TEST above does.
+    const MAX_CUT_SLOPE_FOR_TEST = 3.0;
+    const CONTINUITY_SLACK_FOR_TEST = 60;
+    const constraintBound = MAX_CUT_SLOPE_FOR_TEST + CONTINUITY_SLACK_FOR_TEST * wRampMax;
+    return (Math.max(maxSlope, constraintBound) + landGapBound) * 1.25;
   }
 
   it("satisfies a data-derived Lipschitz bound (amendment D — see comment above)", () => {
