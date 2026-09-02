@@ -7,6 +7,38 @@
 import * as THREE from "three";
 import { TrackSpline } from "./TrackSpline";
 import { HeightField } from "./terrain/heightField";
+import { BuildingFootprint } from "./HamletBuilder";
+
+/**
+ * Independent random streams per scattered object.
+ *
+ * Every attribute of a tree used to be read off ONE value:
+ *
+ *   const rand = fract(sin(i * 12.9898 + k * 78.233) * 43758.5453);
+ *   const side = rand > 0.5 ? 1 : -1;
+ *   const dist = halfWidth + 3.6 + rand * maxTreeDist + k * 6;
+ *   ... scale, rotation, species and rock-vs-tree all from the same `rand`
+ *
+ * Side and distance therefore could not disagree. Measured on Borbera Sprint: left-hand
+ * trees stood 7.5-33.5 m from the road and right-hand trees 23.9-54.3 m — two ranges that
+ * barely overlap, so one verge was a close hedge and the other distant scatter. Species is
+ * chosen by a threshold on the same number, so it inherited the same split: 281 cypresses on
+ * the left and NONE on the right, 74 boulders on the right and none on the left. Scale
+ * followed distance, and rotation followed species.
+ *
+ * mulberry32 seeded on the station and index instead: eight draws that are actually
+ * independent, still deterministic, still identical on every client.
+ */
+function rngFrom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 const colorGeo = (geo: THREE.BufferGeometry, hex: string): THREE.BufferGeometry => {
   const col = new THREE.Color(hex);
@@ -71,7 +103,10 @@ const mergeGeometries = (geos: THREE.BufferGeometry[]): THREE.BufferGeometry => 
 export function buildInstancedVegetation(
   spline: TrackSpline,
   field: HeightField,
-  vegetationGroup: THREE.Group
+  vegetationGroup: THREE.Group,
+  /** Hamlet buildings to keep clear of. Trees were scattered with no knowledge of them, so
+   *  they grew through walls and roofs. Optional: callers without hamlets pass nothing. */
+  buildings: BuildingFootprint[] = []
 ): void {
   const samples = spline.getAllSamples();
   const count = Math.min(450, Math.floor(samples.length * 1.1));
@@ -136,48 +171,63 @@ export function buildInstancedVegetation(
     const numTreesAtStation = (i % 5 === 0) ? 2 : 1;
 
     for (let k = 0; k < numTreesAtStation; k++) {
-      const hash = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453;
-      const rand = hash - Math.floor(hash);
-
-      const side = rand > 0.5 ? 1 : -1;
+      const rnd = rngFrom(i * 2654435761 + k * 40503);
+      const side = rnd() < 0.5 ? -1 : 1;
       const isRiverSide =
         (side < 0 && (s.exposure === "left" || s.exposure === "both")) ||
         (side > 0 && (s.exposure === "right" || s.exposure === "both"));
 
       const maxTreeDist = isRiverSide ? 42.0 : 34.0;
-      const dist = s.halfWidth + 3.6 + rand * maxTreeDist + k * 6.0;
-      const posX = s.x + s.normalX * dist * side + (rand - 0.5) * 3.0;
-      const pz = s.z + s.normalZ * dist * side + (rand - 0.5) * 3.0;
+      const dist = s.halfWidth + 3.6 + rnd() * maxTreeDist + k * 6.0;
+      // Jitter drawn separately per axis. Both offsets used to be the SAME number, so the
+      // displacement was always along the x = z diagonal.
+      const posX = s.x + s.normalX * dist * side + (rnd() - 0.5) * 3.0;
+      const pz = s.z + s.normalZ * dist * side + (rnd() - 0.5) * 3.0;
 
       const proj = spline.projectFrenet(posX, pz);
       if (Math.abs(proj.t) <= proj.sample.halfWidth + 2.8 || Math.abs(proj.t) > 60.0) {
         continue;
       }
 
+      // Not through somebody's house.
+      let insideBuilding = false;
+      for (const b of buildings) {
+        if (Math.hypot(b.x - posX, b.z - pz) < b.r + 3.0) {
+          insideBuilding = true;
+          break;
+        }
+      }
+      if (insideBuilding) continue;
+
       // Ground at the tree's ACTUAL world position. The previous code grounded against a
       // road-relative height, which on a sweeper could resolve to a different station
       // entirely and left trees floating by up to 135 m.
       const posY = field.heightAt(posX, pz) - 0.35;
 
-      const scale = 0.85 + rand * 0.45;
+      const scale = 0.85 + rnd() * 0.45;
+      const stretch = 0.95 + rnd() * 0.15;
+      const spin = rnd() * Math.PI * 2;
+      const speciesRoll = rnd();
+      const rockRoll = rnd();
+
       dummy.position.set(posX, posY, pz);
-      dummy.scale.set(scale, scale * (0.95 + rand * 0.15), scale);
-      dummy.rotation.y = rand * Math.PI * 2;
+      dummy.scale.set(scale, scale * stretch, scale);
+      dummy.rotation.y = spin;
       dummy.updateMatrix();
 
-      if (isRiverSide && rand > 0.65 && rockIdx < count) {
+      if (isRiverSide && rockRoll > 0.72 && rockIdx < count) {
         dummy.position.y = posY + 0.35;
-        dummy.scale.set(1.2 + rand * 0.6, 0.7 + rand * 0.4, 1.2 + rand * 0.6);
+        dummy.scale.set(1.2 + speciesRoll * 0.6, 0.7 + speciesRoll * 0.4, 1.2 + speciesRoll * 0.6);
         dummy.updateMatrix();
         rockMesh.setMatrixAt(rockIdx++, dummy.matrix);
       } else if (alt < 620) {
-        if (rand > 0.4 && oliveIdx < count) {
+        if (speciesRoll > 0.4 && oliveIdx < count) {
           oliveMesh.setMatrixAt(oliveIdx++, dummy.matrix);
         } else if (cypIdx < count) {
           cypMesh.setMatrixAt(cypIdx++, dummy.matrix);
         }
       } else if (alt >= 620 && alt < 980) {
-        if (rand > 0.35 && pineIdx < count) {
+        if (speciesRoll > 0.35 && pineIdx < count) {
           pineMesh.setMatrixAt(pineIdx++, dummy.matrix);
         } else if (chestnutIdx < count) {
           chestnutMesh.setMatrixAt(chestnutIdx++, dummy.matrix);
@@ -204,6 +254,13 @@ export function buildInstancedVegetation(
   cypMesh.castShadow = true;
   oliveMesh.castShadow = true;
   chestnutMesh.castShadow = true;
+
+  // Named so tests can tell the species apart without depending on child order.
+  pineMesh.name = "veg-pine";
+  cypMesh.name = "veg-cypress";
+  oliveMesh.name = "veg-olive";
+  chestnutMesh.name = "veg-chestnut";
+  rockMesh.name = "veg-rock";
 
   vegetationGroup.add(pineMesh, cypMesh, oliveMesh, chestnutMesh, rockMesh);
 }

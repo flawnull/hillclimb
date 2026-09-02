@@ -24,33 +24,37 @@ import { valleyLandAt, VALLEY_SPAN } from "../src/game/track/terrain/layers/vall
 // weakening what it catches.
 const SAMPLE_STRIDE = 1;
 
-// roadProfile.ts's own internal falloff constant for the exposed-side drop
-// (`1 - 1/(1 + dd * DROP_FALLOFF)`), duplicated here because it is not exported and this
-// file must not modify roadProfile.ts. If that constant ever changes, this must too.
-const DROP_FALLOFF = 0.055;
+/**
+ * roadProfile.ts's own internal slope constants, duplicated because they are not exported
+ * and this file must not modify roadProfile.ts. If either changes, this must too.
+ *
+ * STALENESS THIS FIXES. The value here used to be `DROP_FALLOFF = 0.055` and the bound below
+ * was `depth * DROP_FALLOFF` — the near-verge gradient when the exposed drop used a fixed
+ * falloff RATE. That constant no longer exists: the profile now holds a fixed near-verge
+ * SLOPE and lets the rate follow from the depth, precisely so that a deep drop does not fall
+ * off a cliff at the verge. The old expression therefore kept handing out a tolerance
+ * proportional to dropDepth: on Salita di Cosola, `280 * 0.055` = 15.4 m/m against a profile
+ * that can no longer exceed 1.36 m/m anywhere. Every continuity assertion below was running
+ * with roughly ten times the slack it was written to have, and would have passed a genuine
+ * wedge discontinuity. A duplicated constant that silently outlives the code it mirrors is
+ * worse than no bound at all, because the suite still reports green.
+ */
+const DROP_SLOPE = 1.15;
+/** The cut side's steepest branch: HILLSIDE_RISE * HILL_FALLOFF = 85 * 0.016. */
+const CUT_MAX_SLOPE = 1.36;
 
 /**
- * The steepest slope profileHeightAt can legitimately produce: the initial gradient of
- * the exposed-side drop at d=0, `depth * DROP_FALLOFF`, where `depth` is exactly what
- * roadProfile.ts uses — min(dropDepth, altitude - VALLEY_FLOOR_ALT, MAX_VISIBLE_DROP).
- * A cliff at this slope is real terrain, not a defect; the continuity tests below assert
- * against a tolerance derived from this bound (computed per stage from its own samples),
- * not a fixed constant, so they catch wedge discontinuities without outlawing real cliffs.
+ * The steepest slope profileHeightAt can legitimately produce at any lateral offset.
+ *
+ * Now independent of the sample: the exposed branch is capped at DROP_SLOPE by construction
+ * whatever depth it eventually reaches, and the cut branch at CUT_MAX_SLOPE. A cliff at this
+ * slope is real terrain, not a defect, and the continuity tests below derive their tolerance
+ * from it rather than from a fixed constant that would either outlaw real cliffs or hide
+ * real jumps. The parameter is kept so call sites read as "the bound for THIS sample" and so
+ * a future depth-dependent branch has somewhere to go.
  */
-function maxLegitSlopeForSample(s: { dropDepth?: number; altitude: number }): number {
-  const declared = s.dropDepth ?? 40;
-  const toValleyFloor = Math.max(20, s.altitude - VALLEY_FLOOR_ALT);
-  const depth = Math.min(declared, toValleyFloor, MAX_VISIBLE_DROP);
-  return depth * DROP_FALLOFF;
-}
-
-function maxLegitSlope(spline: TrackSpline): number {
-  let max = 0;
-  for (const s of spline.getAllSamples()) {
-    const slope = maxLegitSlopeForSample(s);
-    if (slope > max) max = slope;
-  }
-  return max;
+function maxLegitSlopeForSample(_s: { dropDepth?: number; altitude: number }): number {
+  return Math.max(DROP_SLOPE, CUT_MAX_SLOPE);
 }
 
 describe("RoadIndex", () => {
@@ -485,7 +489,18 @@ describe("roadCarveLayer", () => {
         const slope = maxLegitSlopeForSample(h.sample);
         if (slope > max) max = slope;
       }
-      return max * 1.25 * step;
+      // The layer no longer returns the faded minimum alone: it clamps that between a
+      // support floor (MAX_BANK_SLOPE) and a hard clearance ceiling (MAX_CUT_SLOPE), added so
+      // one tier's drop profile could not pull the ground out from under a neighbouring
+      // tier. Where either is the binding constraint the result follows ITS slope, plus the
+      // gradient of the continuity slack that fades each one out at the query radius. Both
+      // constants must track roadCarveLayer.ts.
+      const MAX_CUT_SLOPE_FOR_TEST = 3.0;
+      const CONTINUITY_SLACK_FOR_TEST = 60;
+      const CORE_RADIUS_FOR_CARVE = 12;
+      const slackGradient = CONTINUITY_SLACK_FOR_TEST * (1.5 / (CARVE_RADIUS - CORE_RADIUS_FOR_CARVE));
+      const constraintBound = MAX_CUT_SLOPE_FOR_TEST + slackGradient;
+      return Math.max(max, constraintBound) * 1.25 * step;
     }
 
     let prevX = s.x - s.normalX * 120, prevZ = s.z - s.normalZ * 120;
@@ -749,28 +764,66 @@ describe("HeightField", () => {
   // separately, exactly, at every probe — including at least one far-field point (beyond
   // CARVE_RADIUS, no road hits at all) and one in-band point (near-field, carveAt has
   // hits), since those take different code paths inside sampleAt.
-  it("sampleAt matches heightAt and classifyAt exactly, near field and far field", () => {
+  /**
+   * REPLACES a tautology. This test used to assert
+   * `field.sampleAt(x, z).height === field.heightAt(x, z)` — but createHeightField defines
+   * `heightAt: (x, z) => sampleAt(x, z).height` and `classifyAt: (x, z) => sampleAt(x, z).color`,
+   * so it was asserting `sampleAt(p).height === sampleAt(p).height`. It could only ever fail
+   * if the field were non-deterministic, which the test above it already covers, and it went
+   * on passing through every terrain defect this suite exists to catch.
+   *
+   * The property worth having is the one the implementation actually risks. `sampleAt` runs
+   * one `index.query` for the centre point and then REUSES that hit list for its two slope
+   * probes via `reproject`, which builds new RoadHit objects from the shared `sample`
+   * references. If any of that ever mutated a hit or a sample in place — or if the index's
+   * per-query scratch state leaked between calls — results would start depending on what was
+   * sampled just before, and a terrain mesh would come out subtly different depending on the
+   * order its vertices happened to be generated in. Nothing else in this suite would notice:
+   * every other test samples points in one fixed order.
+   */
+  it("sampleAt is a pure function of position, whatever was sampled before it", () => {
     const spline = new TrackSpline(getStageDef("borbera-sprint"));
     const field = createHeightField(spline);
     const all = spline.getAllSamples();
 
-    for (let i = 0; i < all.length; i += 30) {
+    const probes: [number, number][] = [];
+    for (let i = 0; i < all.length; i += 97) {
       const s = all[i];
-      // 4 (near field, well inside CARVE_RADIUS = 90) and 400 (far field, well beyond it)
-      // cover both branches of sampleAt; 90 itself probes right at the seam.
+      // Near field, the seam at CARVE_RADIUS, and far field.
       for (const lat of [4, 30, 90, 400, 1200]) {
         for (const side of [-1, 1]) {
-          const x = s.x + s.normalX * lat * side;
-          const z = s.z + s.normalZ * lat * side;
-
-          const sample = field.sampleAt(x, z);
-          const h = field.heightAt(x, z);
-          const c = field.classifyAt(x, z);
-
-          assert.equal(sample.height, h, `height mismatch at s=${s.s} lat=${lat * side}`);
-          assert.deepEqual(sample.color, c, `colour mismatch at s=${s.s} lat=${lat * side}`);
+          probes.push([s.x + s.normalX * lat * side, s.z + s.normalZ * lat * side]);
         }
       }
+    }
+    assert.ok(probes.length > 100, "expected a decent set of probe points");
+
+    // Baseline, in order.
+    const baseline = probes.map(([x, z]) => field.sampleAt(x, z));
+
+    // Now re-sample each point again, but with the whole probe set walked in between and in
+    // reverse — so every call is preceded by a different query neighbourhood than it was the
+    // first time.
+    for (let i = probes.length - 1; i >= 0; i--) {
+      const [x, z] = probes[i];
+      const again = field.sampleAt(x, z);
+      assert.equal(
+        again.height,
+        baseline[i].height,
+        `sampleAt(${x.toFixed(2)}, ${z.toFixed(2)}) returned ${again.height} after a different ` +
+          `call order, ${baseline[i].height} before — the field is carrying state between calls`
+      );
+      assert.deepEqual(again.color, baseline[i].color, "colour changed with call order");
+    }
+
+    // And the convenience wrappers must not diverge from the combined entry point. This is
+    // trivially true while they delegate; it is here so that an optimisation which gives
+    // heightAt its own cheaper path — the obvious next change to this file — cannot silently
+    // return something different from what the mesh builder sees.
+    for (let i = 0; i < probes.length; i += 7) {
+      const [x, z] = probes[i];
+      assert.equal(field.heightAt(x, z), baseline[i].height, "heightAt diverged from sampleAt");
+      assert.deepEqual(field.classifyAt(x, z), baseline[i].color, "classifyAt diverged from sampleAt");
     }
   });
 });

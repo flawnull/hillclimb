@@ -12,6 +12,7 @@ import { chunkMeshBySpace } from "../batchStatics";
 import { createHeightField, HeightField } from "./heightField";
 import { buildChunkedTerrain } from "./TerrainMeshBuilder";
 import { buildInstancedVegetation } from "../VegetationScatterBuilder";
+import { BuildingFootprint } from "../HamletBuilder";
 
 /**
  * Flip any triangle that winds clockwise in the XZ plane (as seen from above) so every
@@ -55,7 +56,7 @@ export class TerrainSystem {
   public readonly embankmentMesh: THREE.Group;
   private readonly spline: TrackSpline;
 
-  constructor(spline: TrackSpline, field?: HeightField) {
+  constructor(spline: TrackSpline, field?: HeightField, buildings: BuildingFootprint[] = []) {
     this.spline = spline;
     // Accepts a field the caller already built, so the renderer can ground roadside buildings
     // on the same terrain without paying to construct it twice.
@@ -63,7 +64,7 @@ export class TerrainSystem {
     this.mesh = buildChunkedTerrain(this.field);
     this.riverMesh = chunkMeshBySpace(this.buildRiverMesh(), 250);
     this.vegetationGroup = new THREE.Group();
-    buildInstancedVegetation(spline, this.field, this.vegetationGroup);
+    buildInstancedVegetation(spline, this.field, this.vegetationGroup, buildings);
     this.embankmentMesh = chunkMeshBySpace(this.buildEmbankment(), 250);
   }
 
@@ -131,6 +132,8 @@ export class TerrainSystem {
     const MIN_RUN_M = 26;
     /** A dip this short does not warrant breaking a wall in two. */
     const MAX_GAP_M = 22;
+    /** A wall this tall is kept whatever its run length — see the demotion pass below. */
+    const TALL_WALL = 8;
 
     const nodeSpacing = (this.spline.totalLength / Math.max(1, samples.length - 1)) * STEP;
 
@@ -196,8 +199,26 @@ export class TerrainSystem {
 
       for (const r of runs()) {
         if (r.kind === 0) continue;
+        // A short VIADUCT run is never dropped. The stub argument applies to a retaining
+        // wall — a 10 m piece of masonry standing alone in the grass looks like a detached
+        // slab, and the bank it would have held is only a bank. It does not apply here:
+        // above MAX_WALL the carriageway is genuinely in mid-air, and removing its deck and
+        // piers leaves the road hanging with nothing under it, which is the defect the whole
+        // structure pass exists to prevent. Measured on Salita di Cosola, dropping these left
+        // 15 verge nodes unsupported, the worst 18.6 m above the ground.
+        if (r.kind === 2) continue;
         const lengthM = (r.to - r.from + 1) * nodeSpacing;
         if (lengthM >= MIN_RUN_M) continue;
+        // Nor is a TALL wall a stub, however short its run. The stub argument is about a
+        // low bank that needs nothing; a run that reaches this far above the ground is
+        // holding real weight, and dropping it left the airborne nodes at its ends with
+        // nothing under them.
+        let deepest = 0;
+        for (let i = r.from; i <= r.to; i++) {
+          const d = nodes[i].top - nodes[i].groundY;
+          if (d > deepest) deepest = d;
+        }
+        if (deepest > TALL_WALL) continue;
         const before = r.from > 0 ? nodes[r.from - 1].kind : 0;
         const after = r.to + 1 < nodes.length ? nodes[r.to + 1].kind : 0;
         // A stub between two walls is a wall; a stub standing on its own is nothing.

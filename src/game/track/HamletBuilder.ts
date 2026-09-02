@@ -56,6 +56,14 @@ function rngFrom(seed: number): () => number {
   };
 }
 
+/** Where a building stands and how much room it takes, so other scatter can avoid it. */
+export interface BuildingFootprint {
+  x: number;
+  z: number;
+  /** Radius that comfortably contains the building, metres. */
+  r: number;
+}
+
 type Kind = "casa" | "casaLarga" | "torre" | "stalla" | "rustico" | "cappella";
 
 /** Wall stucco. Cream and ochre, the colours lime render goes in this valley. */
@@ -131,13 +139,11 @@ function dimensionsFor(kind: Kind, rnd: () => number): Dims {
   }
 }
 
-function makeBuilding(kind: Kind, rnd: () => number): THREE.Group {
+function makeBuilding(kind: Kind, rnd: () => number, wallColor: string, roofColor: string): THREE.Group {
   const g = new THREE.Group();
   const dim = dimensionsFor(kind, rnd);
   const pickFrom = <T,>(arr: readonly T[]) => arr[Math.floor(rnd() * arr.length)];
 
-  const wallColor = pickFrom(WALL_COLORS);
-  const roofColor = pickFrom(ROOF_COLORS);
   const shutterColor = pickFrom(SHUTTER_COLORS);
 
   // Rough stone plinth. Wider than the walls and sunk into the slope, so the building beds
@@ -260,7 +266,7 @@ export function buildHamlet(
   allSamples: SplineSample[],
   group: THREE.Group,
   groundAt?: (x: number, z: number) => number
-): void {
+): BuildingFootprint[] {
   const rnd = rngFrom(Math.round(anchor.s * 1000) ^ 0x9e3779b9);
   const between = (a: number, b: number) => a + rnd() * (b - a);
 
@@ -280,7 +286,27 @@ export function buildHamlet(
   const centreLat = between(26, 46) * side;
   const centreAlong = between(-12, 26);
 
-  const placed: { x: number; z: number; r: number }[] = [];
+  const placed: BuildingFootprint[] = [];
+
+  /**
+   * Wall and roof colours are dealt from a SHUFFLED palette rather than drawn independently,
+   * so a village of five houses cannot come out in two colours. Drawing with replacement it
+   * can and did: the first hamlet on Salita di Cosola used two of the six wall colours
+   * across five buildings, which reads as the repetition this rewrite exists to remove.
+   * Dealing guarantees every colour is used once before any is used twice.
+   */
+  const dealer = (palette: readonly string[]): (() => string) => {
+    const deck = [...palette];
+    // Fisher-Yates on the hamlet's own stream, so the shuffle is deterministic too.
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    let cursor = 0;
+    return () => deck[cursor++ % deck.length];
+  };
+  const nextWall = dealer(WALL_COLORS);
+  const nextRoof = dealer(ROOF_COLORS);
 
   const groundOf = (x: number, z: number) => (groundAt ? groundAt(x, z) : anchor.y);
 
@@ -307,10 +333,10 @@ export function buildHamlet(
    * cliff face is not a hamlet), and flat enough over its own footprint that it does not
    * hang off a bank. Real ones sit on shelves, which is exactly what this selects for.
    */
-  const buildable = (x: number, z: number, radius: number): number | null => {
+  const buildable = (x: number, z: number, radius: number, slopeTol: number): number | null => {
     const y = groundOf(x, z);
     if (!Number.isFinite(y)) return null;
-    if (y < anchor.y - 26 || y > anchor.y + 26) return null;
+    if (y < anchor.y - 26 * slopeTol || y > anchor.y + 26 * slopeTol) return null;
     let lo = y;
     let hi = y;
     for (const [ox, oz] of [[radius, 0], [-radius, 0], [0, radius], [0, -radius]] as const) {
@@ -320,11 +346,21 @@ export function buildHamlet(
     }
     // Under about 1:4 across the footprint. Steeper than that and it reads as a house
     // half-buried on one side and stilted on the other.
-    if (hi - lo > radius * 0.5) return null;
+    if (hi - lo > radius * 0.5 * slopeTol) return null;
     return y;
   };
 
-  const tryPlace = (kind: Kind, latRange: [number, number], alongRange: [number, number], attempts: number): void => {
+  const tryPlace = (
+    kind: Kind,
+    latRange: [number, number],
+    alongRange: [number, number],
+    attempts: number,
+    /** Multiplier on how much slope and height difference from the road is tolerated. See
+     *  the top-up pass at the end: a steep, tightly-stacked stage has very little ground
+     *  that passes the strict test, and a two-building "hamlet" is worse than a village on
+     *  a slightly steeper shelf. */
+    slopeTol = 1
+  ): boolean => {
     const footprint = kind === "rustico" ? 3.0 : kind === "stalla" || kind === "casaLarga" ? 5.2 : 4.2;
     for (let a = 0; a < attempts; a++) {
       const lat = between(latRange[0], latRange[1]) * side;
@@ -345,17 +381,18 @@ export function buildHamlet(
       // same stage passing beneath or above this spot.
       if (clearanceToRoad(x, z) < footprint + 3.0) continue;
 
-      const y = buildable(x, z, footprint);
+      const y = buildable(x, z, footprint, slopeTol);
       if (y === null) continue;
 
-      const b = makeBuilding(kind, rnd);
+      const b = makeBuilding(kind, rnd, nextWall(), nextRoof());
       // Sunk a little: the plinth's job is to disappear into the slope.
       b.position.set(x, y - 0.5, z);
       b.rotation.y = axis + between(-0.28, 0.28);
       group.add(b);
       placed.push({ x, z, r: footprint });
-      return;
+      return true;
     }
+    return false;
   };
 
   // The knot itself, around the cluster centre.
@@ -393,4 +430,27 @@ export function buildHamlet(
   for (let i = 0; i < roadside; i++) {
     tryPlace(rnd() < 0.6 ? "casa" : "stalla", [10, 17], [-30, 34], 22);
   }
+
+  // Top-up. On a steep, tightly-stacked stage almost no ground passes the strict buildable
+  // test — Salita di Cosola's first village came out with two buildings — and a village of
+  // two is not a village. Relax the slope and height tolerances in steps and search a wider
+  // ring, rather than accept a stub. The road-clearance rule is NOT relaxed at any step: a
+  // house on the carriageway is a defect, a house on a steeper shelf is a hillside village.
+  const MIN_BUILDINGS = 5;
+  for (const tol of [1.6, 2.4, 3.4]) {
+    if (placed.length >= MIN_BUILDINGS) break;
+    for (let i = 0; placed.length < MIN_BUILDINGS && i < 10; i++) {
+      const roll = rnd();
+      const kind: Kind = roll < 0.55 ? "casa" : roll < 0.78 ? "casaLarga" : roll < 0.9 ? "torre" : "rustico";
+      tryPlace(
+        kind,
+        [Math.abs(centreLat) - 24, Math.abs(centreLat) + 26],
+        [centreAlong - 40, centreAlong + 40],
+        26,
+        tol
+      );
+    }
+  }
+
+  return placed;
 }

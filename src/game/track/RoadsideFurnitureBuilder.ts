@@ -6,13 +6,75 @@
 
 import * as THREE from "three";
 import { SplineSample } from "./TrackSpline";
-import { buildHamlet } from "./HamletBuilder";
+import { buildHamlet, BuildingFootprint } from "./HamletBuilder";
 
 function detNormalizeAngle(a: number): number {
   let res = a;
   while (res > Math.PI) res -= 2 * Math.PI;
   while (res < -Math.PI) res += 2 * Math.PI;
   return res;
+}
+
+
+/**
+ * Finds a lateral offset at which a prop is clear of EVERY carriageway, not just the one it
+ * belongs to.
+ *
+ * A prop is positioned from its own sample's `halfWidth`, and that is not enough twice over.
+ * The spline interpolates width between control points, so a few metres along the road can
+ * be wider than the prop assumed — the reason KERB_CLEARANCE was raised from 0.30 to 0.80
+ * once already. And on a switchback the leg above or below passes close enough that an
+ * offset measured from this leg lands inside that one: measured on Salita di Cosola, the
+ * worst guardrail post sat 4.88 m inside another leg's lane and the worst apex kerb 3.75 m
+ * inside one.
+ *
+ * Rather than reject the prop — a missing guardrail is an invisible wall, since Engine.ts
+ * applies solid collision wherever `guardrail` is set — the offset is pushed outward in
+ * small steps until it clears, and only abandoned if it cannot. Samples more than
+ * VERTICAL_REACH below or above are ignored: a leg thirty metres down is not something a
+ * kerb can be standing in.
+ */
+function clearOffset(
+  samples: SplineSample[],
+  s: SplineSample,
+  side: number,
+  startOffset: number,
+  margin: number
+): number | null {
+  const VERTICAL_REACH = 2.5;
+  const STEP = 0.25;
+  const MAX_PUSH = 3.0;
+
+  for (let off = startOffset; off <= startOffset + MAX_PUSH + 1e-9; off += STEP) {
+    const x = s.x + s.normalX * off * side;
+    const z = s.z + s.normalZ * off * side;
+
+    // Mirror TrackSpline.projectFrenet exactly: it picks the NEAREST sample in 2D and then
+    // reports the lateral offset against that sample's own normal. Any other rule (euclidean
+    // distance to the sample, or a window along the tangent) can disagree with it, which is
+    // how a post cleared a hand-rolled check by 4 m and still projected 0.28 m inside the
+    // lane at a hairpin, where the normals rotate faster than the samples advance.
+    //
+    // Samples more than VERTICAL_REACH away in height are excluded, unlike projectFrenet,
+    // which is height-blind: a carriageway twenty metres below is not something a kerb can be
+    // standing in, and treating it as one would strip the furniture off every switchback.
+    let bestLat = Infinity;
+    let bestHw = 0;
+    let bestDistSq = Infinity;
+    for (const other of samples) {
+      if (Math.abs(other.y - s.y) > VERTICAL_REACH) continue;
+      const dx = x - other.x;
+      const dz = z - other.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq >= bestDistSq) continue;
+      bestDistSq = distSq;
+      bestLat = Math.abs(dx * other.normalX + dz * other.normalZ);
+      bestHw = other.halfWidth;
+    }
+
+    if (bestDistSq === Infinity || bestLat >= bestHw + margin) return off;
+  }
+  return null;
 }
 
 export function buildRoadsideFurniture(
@@ -29,7 +91,7 @@ export function buildRoadsideFurniture(
    * hovering in the air on the downhill side.
    */
   groundAt?: (x: number, z: number) => number
-): void {
+): BuildingFootprint[] {
   // --- Hamlets ------------------------------------------------------------------------
   //
   // Built from ANCHORS collected up front, not from inside the per-sample loop.
@@ -42,11 +104,12 @@ export function buildRoadsideFurniture(
   // flags into one tornante.
   const HAMLET_GROUP_GAP_M = 40;
   let lastHamletS = -Infinity;
+  const buildings: BuildingFootprint[] = [];
   for (const s of samples) {
     if (s.landmark !== "hamlet" || s.s < 50) continue;
     if (s.s - lastHamletS < HAMLET_GROUP_GAP_M) continue;
     lastHamletS = s.s;
-    buildHamlet(s, samples, landmarkGroup, groundAt);
+    buildings.push(...buildHamlet(s, samples, landmarkGroup, groundAt));
   }
 
   const POST_RADIAL_SEGMENTS = 6;
@@ -111,18 +174,34 @@ export function buildRoadsideFurniture(
     const s = samples[i];
     const prevS = samples[Math.max(0, i - 2)];
     const nextS = samples[Math.min(samples.length - 1, i + 2)];
-    const dHeading = Math.abs(detNormalizeAngle(nextS.heading - prevS.heading));
+    /** SIGNED turn across this station: positive is a turn toward +normal. */
+    const turn = detNormalizeAngle(nextS.heading - prevS.heading);
+    const dHeading = Math.abs(turn);
     const isCurving = dHeading > 0.04;
     const hw = s.halfWidth + (isCurving ? 0.95 : 0.70);
 
-    // 1. Guardrails on Valley/River side
+    // 1. Guardrails on the exposed side — on BOTH sides where both are exposed.
+    //
+    // This used to read `s.exposure === "left" ? -1 : 1`, a single side, and Engine.ts does
+    // not agree with that: it treats `guardrail` as protecting whichever side the car leaves
+    // (`isExposed && !guardrail` is what triggers the fall, so a guarded sample gets solid
+    // wall collision on either side). On the 110 samples of Borbera Sprint marked
+    // `exposure: 'both'` with a rail, the left-hand rail was therefore never drawn while the
+    // physics still stopped the car dead there — an invisible wall.
+    const guardSides: readonly (-1 | 1)[] =
+      s.exposure === "both" ? [-1, 1] : [s.exposure === "left" ? -1 : 1];
     if (s.guardrail) {
-      const sideSign = s.exposure === "left" ? -1 : 1;
-      const posX = s.x + s.normalX * hw * sideSign;
+     for (const sideSign of guardSides) {
+      const railOffset = clearOffset(samples, s, sideSign, hw, 0.35);
+      if (railOffset === null) continue;
+      const posX = s.x + s.normalX * railOffset * sideSign;
       const posY = s.y + 0.38;
-      const posZ = s.z + s.normalZ * hw * sideSign;
+      const posZ = s.z + s.normalZ * railOffset * sideSign;
 
       const post = new THREE.Mesh(postGeo, postMat);
+      // Named so tests can find them after the group is merged by batchStaticGroup, and so
+      // an unbatched build can assert which side of the road they landed on.
+      post.name = "guardrail-post";
       post.position.set(posX, posY, posZ);
       post.castShadow = true;
       guardrailGroup.add(post);
@@ -130,8 +209,13 @@ export function buildRoadsideFurniture(
       if (i < samples.length - 3 && samples[i + 2].guardrail) {
         const nextGuardS = samples[i + 2];
         const nextIsCurving = Math.abs(detNormalizeAngle(samples[Math.min(samples.length - 1, i + 4)].heading - s.heading)) > 0.04;
-        const nextHw = nextGuardS.halfWidth + (nextIsCurving ? 0.95 : 0.70);
-        const nextSideSign = nextGuardS.exposure === "left" ? -1 : 1;
+        const nextBaseHw = nextGuardS.halfWidth + (nextIsCurving ? 0.95 : 0.70);
+        // Follow this rail's own side into the next post rather than re-deriving it, so a
+        // run that changes exposure does not draw a beam diagonally across the carriageway.
+        const nextSideSign =
+          nextGuardS.exposure === "both" ? sideSign : nextGuardS.exposure === "left" ? -1 : 1;
+        const nextHw = clearOffset(samples, nextGuardS, nextSideSign, nextBaseHw, 0.35);
+        if (nextHw === null) continue;
         const nextPosX = nextGuardS.x + nextGuardS.normalX * nextHw * nextSideSign;
         const nextPosY = nextGuardS.y + 0.38;
         const nextPosZ = nextGuardS.z + nextGuardS.normalZ * nextHw * nextSideSign;
@@ -150,6 +234,7 @@ export function buildRoadsideFurniture(
         reflector.position.set(posX - s.normalX * 0.06 * sideSign, posY + 0.18, posZ - s.normalZ * 0.06 * sideSign);
         guardrailGroup.add(reflector);
       }
+     }
     }
 
     // 2. (removed) Stone retaining walls on the mountain side.
@@ -165,9 +250,20 @@ export function buildRoadsideFurniture(
     // road genuinely needs is built from the height field itself, in TerrainSystem's
     // embankment/viaduct pass, where the ground height is actually known.
 
+    // The inside of the corner, from the geometry rather than from the banking.
+    //
+    // `s.bank > 0 ? 1 : -1` was standing in for this, and banking is not a reliable proxy:
+    // 32 curving samples on Borbera Sprint and 49 on Salita di Cosola carry `bank === 0`, so
+    // the ternary fell through to -1 and put the apex kerb on the OUTSIDE of every
+    // right-hand corner it touched, with the chevron board opposite it on the inside. A
+    // further 9 and 27 samples respectively carry a bank whose sign disagrees with the
+    // direction the road actually turns. The centre of curvature lies on the +normal side
+    // exactly when the heading is increasing (normal = (cos h, -sin h) and the tangent's
+    // derivative is normal * dh/ds), so the sign of the turn IS the inside.
+    const insideSign = turn > 0 ? 1 : -1;
+
     // 3. Apex Kerbs on Curves with active curvature
     if (isCurving) {
-      const insideSign = s.bank > 0 ? 1 : -1;
       const sinB = Math.sin(s.bank);
       const cosB = Math.cos(s.bank);
       const upX = -s.normalX * sinB;
@@ -182,15 +278,19 @@ export function buildRoadsideFurniture(
       // its own on top of that. On the tighter stage layout this put a kerb 5 cm inside the
       // driving lane. Half a metre absorbs both the interpolation and the block.
       const KERB_CLEARANCE = 0.80;
+      const kerbOffset = clearOffset(samples, s, insideSign, s.halfWidth + KERB_CLEARANCE, 0.45);
+      if (kerbOffset !== null) {
       const kerb = new THREE.Mesh(kerbGeo, i % 4 === 0 ? kerbMatRed : kerbMatWhite);
+      kerb.name = "apex-kerb";
       kerb.position.set(
-        s.x + s.normalX * (s.halfWidth + KERB_CLEARANCE) * insideSign + upX * 0.04,
+        s.x + s.normalX * kerbOffset * insideSign + upX * 0.04,
         s.y + upY * 0.04,
-        s.z + s.normalZ * (s.halfWidth + KERB_CLEARANCE) * insideSign + upZ * 0.04
+        s.z + s.normalZ * kerbOffset * insideSign + upZ * 0.04
       );
       kerb.rotation.y = s.heading;
       kerb.rotation.z = s.bank;
       landmarkGroup.add(kerb);
+      }
     }
 
     // 4. Milestone Posts (Cippo Cantoniero SP140) every 250m on straights
@@ -217,7 +317,7 @@ export function buildRoadsideFurniture(
 
     // 5. Hairpin Warning Boards (Tornante Chevron Arrows)
     if (isCurving && Math.abs(s.bank) > 0.035 && i % 6 === 0) {
-      const outerSign = s.bank > 0 ? -1 : 1;
+      const outerSign = -insideSign;
       const chevPost = new THREE.Mesh(
         chevronPostGeo,
         new THREE.MeshStandardMaterial({ color: "#334155" })
@@ -228,6 +328,7 @@ export function buildRoadsideFurniture(
       );
       chevBoard.position.set(0, 0.55, 0);
       const chevGroup = new THREE.Group();
+      chevGroup.name = "chevron";
       chevGroup.position.set(
         s.x + s.normalX * (s.halfWidth + 1.6) * outerSign,
         s.y + 0.2,
@@ -301,4 +402,6 @@ export function buildRoadsideFurniture(
       landmarkGroup.add(signGroup);
     }
   }
+
+  return buildings;
 }

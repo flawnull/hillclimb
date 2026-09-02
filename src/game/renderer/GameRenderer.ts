@@ -277,7 +277,9 @@ export class GameRenderer {
     // 2. Build the unified terrain surface, river and vegetation. There is no separate
     // backdrop mesh: near ground and distant mountains are one continuous surface.
     this.terrain?.dispose();
-    this.terrain = new TerrainSystem(spline, field);
+    // The road mesh is built first (above), so its hamlet footprints are available here and
+    // the vegetation scatter can avoid growing trees through the houses.
+    this.terrain = new TerrainSystem(spline, field, this.roadMesh.buildingFootprints);
     this.trackGroup.add(this.terrain.mesh);
     this.trackGroup.add(this.terrain.riverMesh);
     this.trackGroup.add(this.terrain.vegetationGroup);

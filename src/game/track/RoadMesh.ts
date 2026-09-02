@@ -3,6 +3,7 @@ import { TrackSpline, SplineSample } from "./TrackSpline";
 import { batchStaticGroup, chunkMeshBySpace } from "./batchStatics";
 import { createTwoLaneRoadTexture } from "./RoadTextureGenerator";
 import { buildRoadsideFurniture } from "./RoadsideFurnitureBuilder";
+import { BuildingFootprint } from "./HamletBuilder";
 
 export { createTwoLaneRoadTexture };
 
@@ -10,6 +11,8 @@ export class RoadMesh {
   public mesh: THREE.Group;
   public guardrailGroup: THREE.Group;
   public landmarkGroup: THREE.Group;
+  /** Where the hamlet buildings ended up, so the vegetation scatter can keep out of them. */
+  public buildingFootprints: BuildingFootprint[];
   private spline: TrackSpline;
   private roadTexture: THREE.CanvasTexture;
 
@@ -20,7 +23,12 @@ export class RoadMesh {
     this.roadTexture = createTwoLaneRoadTexture();
     // Chunked so the frustum culler can reject the 10 km of road behind the car.
     this.mesh = chunkMeshBySpace(this.buildRoadGeometry());
-    buildRoadsideFurniture(this.spline.getAllSamples(), this.landmarkGroup, this.guardrailGroup, groundAt);
+    this.buildingFootprints = buildRoadsideFurniture(
+      this.spline.getAllSamples(),
+      this.landmarkGroup,
+      this.guardrailGroup,
+      groundAt
+    );
 
     // Collapse the per-prop meshes into merged per-chunk batches (§13.2). Authoring stays
     // one-prop-at-a-time; drawing does not.
