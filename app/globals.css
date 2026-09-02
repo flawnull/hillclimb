@@ -374,3 +374,44 @@ body {
     animation: none;
   }
 }
+
+
+/* ── Phone portrait ───────────────────────────────────────────────────────
+ * Measured on a 390x844 viewport: the three stacked top rows (timer, stage
+ * banner + actions, car selector) consumed about 320 px before the canvas
+ * began, and the altimeter's numeric labels overflowed their 36 px column at
+ * the right-hand edge so the readout looked clipped rather than compact.
+ *
+ * The canvas is the game. On a phone it gets the space back.
+ */
+@media (orientation: portrait) and (max-width: 500px) {
+  /* The tick labels are wider than the 36 px strip that holds them, so on a phone
+   * they overflowed past the right edge of the screen and the whole readout looked
+   * broken rather than compact. The strip is a gradient profile with a moving
+   * marker — it reads fine without numbers, and the exact altitude is already on
+   * the card beside it. */
+  .hud-alt-tick {
+    display: none;
+  }
+
+  .hud-altimeter-strip {
+    width: 1.5rem;
+  }
+}
+
+/* The steering pad fills a large part of the portrait dock and has to LOOK like
+ * the primary control. It is a relative-anchor drag surface — the whole pad is
+ * live, not just the track drawn on it — which is why a hairline in a big empty
+ * box read as decoration. A dashed carriageway running down it says "this is the
+ * road, steer it" without a word of instruction. */
+.hud-steer-surface {
+  background-image:
+    linear-gradient(
+      to bottom,
+      rgb(148 163 184 / 0.28) 0 42%,
+      transparent 42% 100%
+    );
+  background-size: 0.35rem 2.6rem;
+  background-repeat: repeat-y;
+  background-position: center top;
+}

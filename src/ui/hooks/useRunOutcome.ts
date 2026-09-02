@@ -7,6 +7,7 @@ import { StageDef } from "@/game/track/TrackSpline";
 import { useGameStore, PersonalBest } from "@/store/gameStore";
 import { SplitRecord } from "@/game/timing/Timer";
 import { ReplayFrame } from "@/game/timing/ReplayRecorder";
+import { SIM_VERSION } from "@/game/vehicle/vehicleTuning";
 
 export interface FinishResult {
   totalTimeSeconds: number;
@@ -34,6 +35,23 @@ export function useRunOutcome(engine: Engine, stageDef: StageDef, activeCarDef: 
 
   const runTokenRef = useRef<RunToken | null>(null);
 
+  /**
+   * True when the server is running different physics from this tab.
+   *
+   * The leaderboard rests on deterministic replay, so the validator rejects a submission
+   * whose `simVersion` differs from its own — correctly, since a run recorded under other
+   * physics cannot be re-simulated. But the check only ran at SUBMIT time, which is after
+   * the player has driven the whole stage: deploy a new build while somebody has the game
+   * open and their next three minutes are wasted on a run that was never going to count,
+   * and the message they get is "Simulation version mismatch (server is 13, submission is
+   * 12)".
+   *
+   * `/api/run/start` has always returned the server's `simVersion` and this hook has always
+   * thrown it away. Comparing it here means the mismatch is known when the run STARTS, so
+   * the player can be told to reload before driving rather than after.
+   */
+  const [staleBuild, setStaleBuild] = useState<boolean>(false);
+
   const fetchRunToken = useCallback(async () => {
     try {
       const res = await fetch("/api/run/start", {
@@ -48,6 +66,9 @@ export function useRunOutcome(engine: Engine, stageDef: StageDef, activeCarDef: 
           token: data.token,
           serverTime: data.serverTime,
         };
+        setStaleBuild(
+          typeof data.simVersion === "number" && data.simVersion !== SIM_VERSION
+        );
       }
     } catch {
       // Ignored: fallback handled in modal
@@ -100,5 +121,6 @@ export function useRunOutcome(engine: Engine, stageDef: StageDef, activeCarDef: 
     setShowResultModal,
     runTokenRef,
     fetchRunToken,
+    staleBuild,
   };
 }

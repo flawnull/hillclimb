@@ -155,7 +155,7 @@ export const Altimeter: React.FC<AltimeterProps> = ({
           </svg>
 
           {/* Summit Tick Mark */}
-          <div className="absolute top-2 left-1 right-1 flex justify-between items-center text-[9px] text-slate-400 font-bold px-1">
+          <div className="hud-alt-tick absolute top-2 left-1 right-1 flex justify-between items-center text-[9px] text-slate-400 font-bold px-1">
             <span>{Math.round(maxAlt)}m</span>
             <span className="w-2 h-px bg-slate-600" />
           </div>
@@ -164,7 +164,7 @@ export const Altimeter: React.FC<AltimeterProps> = ({
           {interiorTicks.map((a) => (
             <div
               key={a}
-              className="absolute -translate-y-1/2 left-1 right-1 flex justify-between items-center text-[8px] text-slate-500 font-semibold px-1"
+              className="hud-alt-tick absolute -translate-y-1/2 left-1 right-1 flex justify-between items-center text-[8px] text-slate-500 font-semibold px-1"
               style={{ bottom: `${((a - minAlt) / altRange) * 100}%` }}
             >
               <span>{a}m</span>
@@ -173,7 +173,7 @@ export const Altimeter: React.FC<AltimeterProps> = ({
           ))}
 
           {/* Base Tick Mark */}
-          <div className="absolute bottom-2 left-1 right-1 flex justify-between items-center text-[9px] text-slate-400 font-bold px-1">
+          <div className="hud-alt-tick absolute bottom-2 left-1 right-1 flex justify-between items-center text-[9px] text-slate-400 font-bold px-1">
             <span>{Math.round(minAlt)}m</span>
             <span className="w-2 h-px bg-slate-600" />
           </div>

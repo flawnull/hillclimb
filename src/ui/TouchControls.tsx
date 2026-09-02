@@ -88,7 +88,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({ engine }) => {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
-        className="hud-botleft hud-steer relative bg-slate-950/60 active:bg-slate-900/80 border border-slate-800/80 rounded-3xl backdrop-blur-md flex flex-col items-center justify-center cursor-grab active:cursor-grabbing shadow-2xl overflow-hidden touch-none select-none"
+        className="hud-botleft hud-steer hud-steer-surface relative bg-slate-950/60 active:bg-slate-900/80 border border-slate-800/80 rounded-3xl backdrop-blur-md flex flex-col items-center justify-center cursor-grab active:cursor-grabbing shadow-2xl overflow-hidden touch-none select-none"
       >
         {/* Guide track. The whole pad is the drag surface (§9.1, relative anchor), but a
             10px hairline in a large empty box read as decoration rather than as the

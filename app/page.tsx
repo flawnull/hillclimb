@@ -78,6 +78,7 @@ export default function HomePage() {
     setShowResultModal,
     runTokenRef,
     fetchRunToken,
+    staleBuild,
   } = useRunOutcome(engine, stageDef, activeCarDef, selectedCarId);
 
   const handleNextCar = () => {
@@ -234,6 +235,23 @@ export default function HomePage() {
             handbrake bottom-centre. Placed into the grid via display:contents. */}
         <TouchControls engine={engine} />
       </div>
+
+      {/* A deploy landed while this tab was open. Said before the run rather than after it:
+          the run would be rejected on submission, and finding that out three minutes later
+          is the worst possible moment. */}
+      {staleBuild && (
+        <div className="fixed top-0 inset-x-0 z-[55] flex items-center justify-center gap-3 px-4 py-2 bg-amber-500 text-slate-950 font-mono text-[11px] sm:text-xs font-bold tracking-wide">
+          <span className="text-center">
+            A NEW VERSION OF THE GAME IS LIVE — RELOAD BEFORE DRIVING, OR YOUR TIME CANNOT BE SUBMITTED.
+          </span>
+          <button
+            onClick={() => window.location.reload()}
+            className="shrink-0 px-3 py-1 rounded-md bg-slate-950 text-amber-400 uppercase tracking-wider active:scale-95 transition-transform"
+          >
+            Reload
+          </button>
+        </div>
+      )}
 
       {/* Loading veil — the WHOLE page, not just the canvas.
           Fixed and above the HUD grid (z-20) and the tap-to-start prompt (z-30), so the
