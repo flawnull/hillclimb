@@ -6,6 +6,7 @@
 
 import * as THREE from "three";
 import { SplineSample } from "./TrackSpline";
+import { buildHamlet } from "./HamletBuilder";
 
 function detNormalizeAngle(a: number): number {
   let res = a;
@@ -29,6 +30,25 @@ export function buildRoadsideFurniture(
    */
   groundAt?: (x: number, z: number) => number
 ): void {
+  // --- Hamlets ------------------------------------------------------------------------
+  //
+  // Built from ANCHORS collected up front, not from inside the per-sample loop.
+  // `TrackBuilder.village()` marks two consecutive samples about two metres apart, and the
+  // loop below visits both, so a hamlet used to be generated twice — and since its seed was
+  // `floor(s.s / 7)`, both generations fell in the same bucket and produced the same houses
+  // two metres apart. That interpenetrating duplicate is what "two types of house right next
+  // to each other" was. Grouping marked samples that are within HAMLET_GROUP_GAP_M of one
+  // another leaves exactly one anchor per village, the same way Engine groups hairpin apex
+  // flags into one tornante.
+  const HAMLET_GROUP_GAP_M = 40;
+  let lastHamletS = -Infinity;
+  for (const s of samples) {
+    if (s.landmark !== "hamlet" || s.s < 50) continue;
+    if (s.s - lastHamletS < HAMLET_GROUP_GAP_M) continue;
+    lastHamletS = s.s;
+    buildHamlet(s, samples, landmarkGroup, groundAt);
+  }
+
   const POST_RADIAL_SEGMENTS = 6;
   const POLE_RADIAL_SEGMENTS = 8;
 
@@ -46,10 +66,6 @@ export function buildRoadsideFurniture(
   const reflectorGeo = new THREE.BoxGeometry(0.03, 0.08, 0.08);
   const reflectorMatRed = new THREE.MeshStandardMaterial({ color: "#ef4444", roughness: 0.2, metalness: 0.8 });
   const reflectorMatWhite = new THREE.MeshStandardMaterial({ color: "#f8fafc", roughness: 0.2, metalness: 0.8 });
-
-  // Stone Retaining Wall Material
-  const wallGeo = new THREE.BoxGeometry(0.6, 1.4, 3.2);
-  const wallMat = new THREE.MeshStandardMaterial({ color: "#78716c", roughness: 0.95, flatShading: true });
 
   // Start & Finish Gantries
   if (samples.length > 5) {
@@ -136,21 +152,18 @@ export function buildRoadsideFurniture(
       }
     }
 
-    // 2. Stone Retaining Walls on Mountain Cut side
-    if (s.exposure === "right" || s.exposure === "left") {
-      const mountainSign = s.exposure === "right" ? -1 : 1;
-      if (i % 4 === 0 && !isCurving) {
-        const wall = new THREE.Mesh(wallGeo, wallMat);
-        wall.position.set(
-          s.x + s.normalX * (s.halfWidth + 1.4) * mountainSign,
-          s.y + 0.6,
-          s.z + s.normalZ * (s.halfWidth + 1.4) * mountainSign
-        );
-        wall.rotation.y = s.heading;
-        wall.castShadow = true;
-        guardrailGroup.add(wall);
-      }
-    }
+    // 2. (removed) Stone retaining walls on the mountain side.
+    //
+    // These were 3.2 m x 1.4 m x 0.6 m boxes dropped every fourth sample at a FIXED height
+    // of `s.y + 0.6` — road height, never the ground's. Nothing grounded them, so on any
+    // slope they hung in the air or sank; nothing joined them, so they read as a dashed row
+    // of detached slabs rather than as a wall; and seen from below the road they were the
+    // black blocks flanking the carriageway that made the road itself look like a thick wall
+    // from off-axis. They also depicted something that is not there: the carve profile
+    // (roadProfile.ts, CUT_SLOPE = 0.42) rises about 0.65 m over the first five metres on
+    // the cut side, which is a grass bank, not a face that needs retaining. Structure the
+    // road genuinely needs is built from the height field itself, in TerrainSystem's
+    // embankment/viaduct pass, where the ground height is actually known.
 
     // 3. Apex Kerbs on Curves with active curvature
     if (isCurving) {
@@ -286,120 +299,6 @@ export function buildRoadsideFurniture(
       signGroup.position.set(s.x + s.normalX * (s.halfWidth + 1.4), s.y, s.z + s.normalZ * (s.halfWidth + 1.4));
       signGroup.rotation.y = s.heading;
       landmarkGroup.add(signGroup);
-    } else if (s.landmark === "hamlet" && s.s >= 50) {
-      // Ligurian Apennine hamlet, not four copies of one box.
-      //
-      // Every house was previously an identical 6.4 x 5.2 x 5.4 block under an identical
-      // terracotta cone, with only the wall colour varying — so a village read as a row of
-      // clones. The interior of this region builds tall and narrow in stuccoed stone, roofed
-      // in local slate (ardesia) as often as in terracotta, with the odd low barn or byre
-      // between the houses.
-      const houseColors = ["#e2d5c3", "#d8b28a", "#c49a7a", "#ecd9b8", "#cfa98f", "#dfc9a2"];
-      const shutterColors = ["#14532d", "#1e3a8a", "#451a03", "#166534", "#3f2d1c"];
-      // Slate first: at this altitude it is the more common roof, and its grey is what makes
-      // the terracotta houses read as a mix rather than a uniform orange village.
-      const roofColors = ["#4b5563", "#5b6470", "#b45309", "#9a4a12", "#6b7280"];
-
-      for (let h = -1; h <= 1; h += 2) {
-       for (let along = 0; along < 2; along++) {
-        // Deterministic per house: same village every build, but each dwelling different.
-        const seed = Math.abs(Math.floor(s.s / 7) * 31 + (h > 0 ? 17 : 5) + along * 47);
-        const colorIdx = seed % houseColors.length;
-        const roofIdx = (seed >> 2) % roofColors.length;
-        const variant = seed % 5; // 0-2 dwellings, 3 barn, 4 tower house
-        const houseGroup = new THREE.Group();
-
-        const setback = s.halfWidth + 4.8 + ((seed % 7) * 0.9);
-
-        // Footprint and height by type. Tower houses are narrow and tall, barns low and wide.
-        const hW = variant === 4 ? 4.6 : variant === 3 ? 7.8 : 5.6 + (seed % 4) * 0.7;
-        const hD = variant === 3 ? 6.2 : 4.4 + ((seed >> 1) % 4) * 0.6;
-        const hH = variant === 4 ? 9.2 : variant === 3 ? 3.6 : 5.0 + ((seed >> 3) % 3) * 1.6;
-
-        const baseGeo = new THREE.BoxGeometry(hW + 0.2, 2.4, hD + 0.2);
-        const baseMat = new THREE.MeshStandardMaterial({ color: "#6b655b", roughness: 0.95, flatShading: true });
-        const base = new THREE.Mesh(baseGeo, baseMat);
-        base.position.set(0, -0.4, 0);
-        base.castShadow = true;
-        base.receiveShadow = true;
-
-        const bodyGeo = new THREE.BoxGeometry(hW, hH, hD);
-        const bodyMat = new THREE.MeshStandardMaterial({ color: houseColors[colorIdx], roughness: 0.88 });
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.set(0, hH / 2 + 0.8, 0);
-        body.castShadow = true;
-        body.receiveShadow = true;
-
-        // Barns get a shallow roof, tower houses a steep one, dwellings something between.
-        const roofPitch = variant === 3 ? 1.4 : variant === 4 ? 3.0 : 2.2 + (seed % 3) * 0.35;
-        const roofGeo = new THREE.ConeGeometry((hW / 2) * 1.38, roofPitch, 4);
-        const roofMat = new THREE.MeshStandardMaterial({ color: roofColors[roofIdx], roughness: 0.84 });
-        const roof = new THREE.Mesh(roofGeo, roofMat);
-        roof.position.set(0, hH + 0.8 + roofPitch / 2, 0);
-        // Ridge runs along the road for some, across it for others, so rooflines vary.
-        roof.rotation.y = Math.PI / 4 + (seed % 2) * (Math.PI / 2);
-        roof.castShadow = true;
-
-        const winGeo = new THREE.BoxGeometry(0.75, 1.05, 0.06);
-        const winMat = new THREE.MeshStandardMaterial({ color: "#f8fafc", roughness: 0.3 });
-        const shutGeo = new THREE.BoxGeometry(0.38, 1.05, 0.08);
-        const shutMat = new THREE.MeshStandardMaterial({ color: shutterColors[colorIdx], roughness: 0.7 });
-
-        const faceZ = -(hD / 2 + 0.04);
-        // Rows follow the building's real height, so a tower house gets three storeys and a
-        // barn one, instead of every type carrying the same two rows at fixed heights.
-        const storeys = variant === 3 ? 1 : Math.max(2, Math.round((hH - 1.2) / 2.2));
-        const winXs = variant === 4 ? [-1.1, 1.1] : [-(hW / 2 - 1.0), hW / 2 - 1.0];
-        for (const winX of winXs) {
-          for (let row = 0; row < storeys; row++) {
-            const winY = 2.4 + row * 2.2;
-            if (winY > hH + 0.2) continue;
-            const win = new THREE.Mesh(winGeo, winMat);
-            win.position.set(winX, winY, faceZ);
-
-            const shutL = new THREE.Mesh(shutGeo, shutMat);
-            shutL.position.set(winX - 0.45, winY, faceZ + 0.02);
-            const shutR = new THREE.Mesh(shutGeo, shutMat);
-            shutR.position.set(winX + 0.45, winY, faceZ + 0.02);
-
-            houseGroup.add(win, shutL, shutR);
-          }
-        }
-
-        const doorGeo = new THREE.BoxGeometry(1.1, 2.1, 0.08);
-        const doorMat = new THREE.MeshStandardMaterial({ color: "#451a03", roughness: 0.8 });
-        const door = new THREE.Mesh(doorGeo, doorMat);
-        door.position.set(0, 1.85, faceZ);
-        houseGroup.add(door);
-
-        const chimGeo = new THREE.BoxGeometry(0.55, 1.6, 0.55);
-        const chimMat = new THREE.MeshStandardMaterial({ color: "#991b1b", roughness: 0.9 });
-        const chimney = new THREE.Mesh(chimGeo, chimMat);
-        chimney.position.set(1.6, hH + 2.4, 0.8);
-        chimney.castShadow = true;
-        houseGroup.add(chimney);
-
-        const isDrop = (h < 0 && s.exposure === "left") || (h > 0 && s.exposure === "right");
-        if (isDrop && (s.dropDepth ?? 0) > 20) continue;
-
-        houseGroup.add(base, body, roof);
-        // Stagger the second dwelling along the road and set it back differently, so the two
-        // read as a street rather than as a pair facing each other across the carriageway.
-        const alongOffset = along === 0 ? 0 : 11.0 + (seed % 5) * 1.4;
-        const tanX = -s.normalZ;
-        const tanZ = s.normalX;
-        const hx = s.x + s.normalX * setback * h + tanX * alongOffset;
-        const hz = s.z + s.normalZ * setback * h + tanZ * alongOffset;
-        // Sit the house on the ground at its OWN position, sunk slightly so the stone base
-        // beds into the slope rather than perching on it.
-        const hy = (groundAt ? groundAt(hx, hz) : s.y) - 0.35;
-        houseGroup.position.set(hx, hy, hz);
-        // Roughly facing the road, but not all exactly square to it.
-        const skew = ((seed % 7) - 3) * 0.06;
-        houseGroup.rotation.y = s.heading + (h > 0 ? -Math.PI / 2 : Math.PI / 2) + skew;
-        landmarkGroup.add(houseGroup);
-       }
-      }
     }
   }
 }
