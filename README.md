@@ -2,7 +2,7 @@
 
 A browser-based, high-performance 3D racing game built from scratch using **Next.js**, **Three.js (Vanilla WebGL)**, and a **Custom Deterministic Physics Engine**.
 
-**Play it: [race108.vercel.app](https://race108.vercel.app)**
+**Play it: [borbera108.vercel.app](https://borbera108.vercel.app)**
 
 ![Salita di Cosola — stacked switchbacks](./docs/screenshots/salita-cosola.png)
 *Salita di Cosola: the switchback spreads across the hillside rather than stacking, so every metre of it sits on ground.*
@@ -100,7 +100,7 @@ to the user.
 **4. Verify the deployment** by pointing the smoke test at it:
 
 ```bash
-SMOKE_BASE_URL=https://race108.vercel.app npm run smoke
+SMOKE_BASE_URL=https://borbera108.vercel.app npm run smoke
 ```
 
 It drives a real run in a headless browser and fails on any console error, so a missing

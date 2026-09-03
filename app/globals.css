@@ -338,24 +338,59 @@ body {
 }
 
 
-/* ── Loading veil ─────────────────────────────────────────────────────────
- * A road, not a spinner. "Generating Mountain Stage..." told the player what
- * the code was doing rather than what was happening, which reads as a
- * developer message; the lane markings sliding past say "loading" and "this
- * is a driving game" at the same time, with no jargon to parse.
+/* ── Loading bar ──────────────────────────────────────────────────────────
+ * A road with the car's progress along it — the TRACK carries the dashed centre
+ * line, and the FILL is how far the build has got.
+ *
+ * These were one element before: a repeating dash gradient on a div whose width
+ * was the progress. That does not read as a bar at all. The gaps between dashes
+ * are transparent, so what you see is one or two amber dashes sitting at
+ * arbitrary positions inside the filled region, drifting because the pattern was
+ * also animated. Captured at 35%, it was a single dash floating in the middle of
+ * an otherwise empty track — which looks like a rendering fault, not progress.
+ *
+ * Progress needs an unambiguous solid edge; motion belongs on the part that is
+ * not carrying that information.
  */
-@keyframes vb-lane-dash {
-  from { background-position: 0 0; }
-  to   { background-position: -80px 0; }
-}
-
-.vb-lane {
+.vb-track {
+  background-color: rgb(30 41 59 / 0.9);
   background-image: repeating-linear-gradient(
     to right,
-    rgb(245 158 11) 0 34px,
-    transparent 34px 80px
+    rgb(148 163 184 / 0.55) 0 14px,
+    transparent 14px 34px
   );
-  animation: vb-lane-dash 0.75s linear infinite;
+  background-position: center;
+  background-repeat: repeat-x;
+  background-size: 34px 2px;
+}
+
+.vb-fill {
+  background: linear-gradient(to bottom, rgb(251 191 36), rgb(217 119 6));
+  position: relative;
+  overflow: hidden;
+}
+
+/* A sheen travelling along the filled part, so the bar is alive even while a slice
+ * of terrain is being generated. `transform` rather than `background-position`:
+ * it is the one property every engine composites, so it keeps moving through the
+ * main-thread work that this screen exists to cover. */
+@keyframes vb-sheen {
+  from { transform: translateX(-140%); }
+  to   { transform: translateX(340%); }
+}
+
+.vb-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(
+    to right,
+    transparent,
+    rgb(255 255 255 / 0.55),
+    transparent
+  );
+  animation: vb-sheen 1.4s linear infinite;
 }
 
 @keyframes vb-loading-dots {
@@ -369,7 +404,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .vb-lane,
+  .vb-fill::after,
   .vb-dot {
     animation: none;
   }

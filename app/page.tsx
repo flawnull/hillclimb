@@ -295,10 +295,10 @@ export default function HomePage() {
           {/* A stretch of road, filling in as the stage is built. Real progress rather than
               an indeterminate loop: the terrain reports where it is, and on a slow device
               the difference between "working" and "hung" is the whole question. */}
-          <div className="mt-6 w-56 sm:w-72 h-3 rounded-full bg-slate-800/80 overflow-hidden border border-slate-700/70">
+          <div className="vb-track mt-6 w-56 sm:w-72 h-3 rounded-full overflow-hidden border border-slate-700/70">
             <div
-              className="vb-lane h-full opacity-90 transition-[width] duration-200 ease-linear"
-              style={{ width: `${Math.max(4, Math.round(buildProgress * 100))}%` }}
+              className="vb-fill h-full rounded-full transition-[width] duration-200 ease-linear"
+              style={{ width: `${Math.max(3, Math.round(buildProgress * 100))}%` }}
             />
           </div>
           <div className="mt-2 text-[10px] tracking-widest text-slate-500 tabular-nums">
