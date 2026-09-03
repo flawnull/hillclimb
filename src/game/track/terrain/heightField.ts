@@ -258,6 +258,29 @@ export function createHeightField(spline: TrackSpline): HeightField {
     g += tint * 0.85;
     b += tint * 0.5;
 
+    // --- Bedding planes on steep faces ---------------------------------------------------
+    //
+    // The terrain's UVs are a planar (x, z) projection — `uvs.push(x * 0.5, z * 0.5)` in
+    // TerrainMeshBuilder. That is right for ground you look down on and collapses on ground
+    // you look ACROSS: every vertex of a near-vertical face gets almost the same UV, so the
+    // albedo texture smears into a single flat wash. A 16 m cut beside the road, which is
+    // what a switchback stacked above another leg looks like from the car, renders as a
+    // blank pale plane filling the screen. That is the "the textures are flat cardboard"
+    // report, and no amount of retuning the texture fixes it: the coordinates carry no
+    // detail there to begin with.
+    //
+    // The macro variation above cannot help either. Its two waves are keyed on x and z with
+    // wavelengths of 150-380 m, and on a vertical face neither coordinate moves far enough
+    // to matter. ALTITUDE does move there, and at a short wavelength, so a term keyed on y
+    // is exactly the missing axis — weighted by local slope so it appears as strata on a cut
+    // face and not as contour banding across a meadow.
+    const strata = Math.sin(y * 0.42 + worldX * 0.05 + worldZ * 0.031) * 0.5 + 0.5;
+    const strataWeight = smoothstep(0.55, 1.30, slope) * 0.16;
+    const strataTint = (strata - 0.5) * strataWeight;
+    r += strataTint * 1.0;
+    g += strataTint * 0.9;
+    b += strataTint * 0.72;
+
     return {
       r: Math.max(0, Math.min(1, r)),
       g: Math.max(0, Math.min(1, g)),

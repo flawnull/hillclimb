@@ -139,7 +139,39 @@ export class TerrainSystem {
 
     const verts: number[] = [];
     const indices: number[] = [];
+    const colors: number[] = [];
     const piers: { x: number; z: number; top: number; bottom: number }[] = [];
+
+    /**
+     * Pushes one vertex colour for the wall tone.
+     *
+     * `k` darkens toward the foot of a wall — masonry is in its own shadow lower down. On
+     * top of that, a sawtooth in world height lays in horizontal courses about a metre
+     * apart and a slow lateral wave varies the stone, so a face that is geometrically a
+     * flat plane does not read as one. Deterministic in world position, so it is stable
+     * across rebuilds and identical on every client.
+     */
+    const shade = (k: number, x: number, y: number, z: number): void => {
+      const grain = Math.sin(x * 0.61 + z * 0.43) * 0.5 + 0.5;
+      const f = k * (0.93 + grain * 0.07);
+      colors.push(0.604 * f, 0.569 * f, 0.529 * f);
+    };
+
+    /**
+     * Rows a wall face is split into vertically, and the source of its coursing.
+     *
+     * Vertex colours only vary AT vertices, so a two-row strip (top edge, bottom edge) has
+     * nowhere to put any detail — it interpolates straight through, and a 16 m retaining
+     * wall filling the screen beside the road is one flat plane. Splitting the face into
+     * rows gives somewhere to put it.
+     *
+     * The coursing is keyed on the ROW INDEX, not on world height. Keying it on height was
+     * the obvious thing and did nothing: rows on a 16 m wall are 2 m apart, so a sawtooth
+     * with a metre-scale wavelength is sampled far below its own Nyquist rate and aliases
+     * into noise-free mush. Row parity is immune to that by construction, and scales with
+     * the wall — courses stay proportional whether the wall is 4 m or 16 m.
+     */
+    const WALL_ROWS = 8;
 
     /** 0 = road meets the ground, 1 = retaining wall, 2 = viaduct deck on piers. */
     type Kind = 0 | 1 | 2;
@@ -209,16 +241,24 @@ export class TerrainSystem {
         if (r.kind === 2) continue;
         const lengthM = (r.to - r.from + 1) * nodeSpacing;
         if (lengthM >= MIN_RUN_M) continue;
-        // Nor is a TALL wall a stub, however short its run. The stub argument is about a
-        // low bank that needs nothing; a run that reaches this far above the ground is
-        // holding real weight, and dropping it left the airborne nodes at its ends with
-        // nothing under them.
+
+        // A short run that is also DEEP is not a stub to be dropped — the road there is
+        // genuinely well above the ground — but it must not be kept as a wall either.
+        // A wall run tapers into the hillside at each end, and over a couple of nodes that
+        // taper IS the whole run: the result is a big flat triangle of masonry hanging on
+        // the slope, wide at the road and pointed at the bottom, which is exactly the
+        // cardboard wedge visible on the hillside above the fourth tornante of Salita di
+        // Cosola. What a road actually does over a short deep gap is bridge it, so this
+        // becomes a viaduct: a thin deck fascia on piers, which is both honest and small.
         let deepest = 0;
         for (let i = r.from; i <= r.to; i++) {
           const d = nodes[i].top - nodes[i].groundY;
           if (d > deepest) deepest = d;
         }
-        if (deepest > TALL_WALL) continue;
+        if (deepest > TALL_WALL) {
+          for (let i = r.from; i <= r.to; i++) nodes[i].kind = 2;
+          continue;
+        }
         const before = r.from > 0 ? nodes[r.from - 1].kind : 0;
         const after = r.to + 1 < nodes.length ? nodes[r.to + 1].kind : 0;
         // A stub between two walls is a wall; a stub standing on its own is nothing.
@@ -245,18 +285,58 @@ export class TerrainSystem {
 
         const base = verts.length / 3;
         for (const p of strip) {
-          verts.push(p.x, p.top, p.z);
-          verts.push(p.x, p.bottom, p.z);
+          for (let row = 0; row <= WALL_ROWS; row++) {
+            const f = row / WALL_ROWS;
+            const y = p.top + (p.bottom - p.top) * f;
+            verts.push(p.x, y, p.z);
+            // Darker at the foot — a wall lit by one directional light and painted in a
+            // single flat tone reads as cut cardboard however well it is placed — with
+            // alternate rows stepped, which is what makes the courses visible.
+            shade((1 - f * 0.38) * (row % 2 === 0 ? 1 : 0.9), p.x, y, p.z);
+          }
         }
+        const stride = WALL_ROWS + 1;
         for (let k = 0; k < strip.length - 1; k++) {
-          const a = base + k * 2;
-          const b = base + (k + 1) * 2;
-          // Wound so the wall faces outward from the road on this side.
-          if (side > 0) indices.push(a, a + 1, b, b, a + 1, b + 1);
-          else indices.push(a, b, a + 1, a + 1, b, b + 1);
+          for (let row = 0; row < WALL_ROWS; row++) {
+            const a = base + k * stride + row;
+            const b = base + (k + 1) * stride + row;
+            // Wound so the wall faces outward from the road on this side.
+            if (side > 0) indices.push(a, a + 1, b, b, a + 1, b + 1);
+            else indices.push(a, b, a + 1, a + 1, b, b + 1);
+          }
         }
 
         if (r.kind !== 2) continue;
+
+        // Abutments: where a span meets the hillside, close it down to the ground.
+        //
+        // A pier is skipped wherever one would spear the carriageway passing beneath, which
+        // is right — real viaducts span those bays — but a SHORT span above a lower leg can
+        // end up with no pier anywhere along it, and then the deck hangs in the air with
+        // nothing touching the earth at all. A real bridge springs from the slope at each
+        // end. Only drawn where the ground at that end is close enough to reach; a span
+        // whose ends are also hundreds of metres up is genuinely a bridge and gets nothing.
+        const ABUTMENT_MAX = 14;
+        for (const end of [r.from, r.to]) {
+          const n = nodes[end];
+          const drop = n.top - DECK_FASCIA - n.groundY;
+          if (drop <= 0 || drop > ABUTMENT_MAX) continue;
+          const inward = end === r.from ? Math.min(r.to, end + 1) : Math.max(r.from, end - 1);
+          const m = nodes[inward];
+          if (m === n) continue;
+          const b = verts.length / 3;
+          for (const [a, bottomY] of [
+            [n, n.groundY],
+            [m, Math.max(m.groundY, m.top - DECK_FASCIA - ABUTMENT_MAX)],
+          ] as const) {
+            verts.push(a.x, a.top - DECK_FASCIA, a.z);
+            shade(0.9, a.x, a.top - DECK_FASCIA, a.z);
+            verts.push(a.x, bottomY, a.z);
+            shade(0.6, a.x, bottomY, a.z);
+          }
+          if (side > 0) indices.push(b, b + 1, b + 2, b + 2, b + 1, b + 3);
+          else indices.push(b, b + 2, b + 1, b + 1, b + 2, b + 3);
+        }
 
         // Piers are placed by distance ALONG THIS SPAN, not on a global modulus of the
         // sample index. A modulus left short spans with a fascia band and no columns under
@@ -305,7 +385,9 @@ export class TerrainSystem {
       const base = verts.length / 3;
       for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
         verts.push(p.x + dx, p.top, p.z + dz);
+        shade(0.94, p.x + dx, p.top, p.z + dz);
         verts.push(p.x + dx, bottom, p.z + dz);
+        shade(0.55, p.x + dx, bottom, p.z + dz);
       }
       for (let f = 0; f < 4; f++) {
         const a = base + f * 2;
@@ -316,13 +398,15 @@ export class TerrainSystem {
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
     geo.setIndex(indices);
     geo.computeVertexNormals();
 
     const mat = new THREE.MeshStandardMaterial({
-      // Pale weathered stone. A dark wall reads as a hole in the hillside rather than as
-      // masonry, which is the opposite of the problem being solved.
-      color: "#9a9187",
+      // Pale weathered stone, modulated per vertex (see `shade`). A dark wall reads as a
+      // hole in the hillside rather than as masonry, which is the opposite of the problem
+      // being solved; a perfectly flat one reads as cardboard.
+      vertexColors: true,
       roughness: 0.95,
       metalness: 0.0,
       // Seen from both sides: a wall on the far side of a hairpin is viewed from behind.
