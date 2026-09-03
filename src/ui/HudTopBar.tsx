@@ -26,6 +26,11 @@ interface HudTopBarProps {
   onOpenLeaderboard: () => void;
   showTuningPanel: boolean;
   onToggleTuningPanel: () => void;
+  /** Hides the parts of the banner that are only useful between runs. On a phone the top
+   *  chrome is three stacked rows — timer, stage banner with actions, car selector — and
+   *  they cost roughly 290 px of a portrait screen before the canvas begins. The car cannot
+   *  be changed mid-run anyway, so during one that row is given back to the road. */
+  isRunning?: boolean;
   /** Rendered between the stage banner (topleft) and the action cluster
    *  (topright) so DOM/tab order matches the visual row despite the two
    *  halves living in separate CSS grid areas. */
@@ -49,6 +54,7 @@ export function HudTopBar({
   onOpenLeaderboard,
   showTuningPanel,
   onToggleTuningPanel,
+  isRunning = false,
   children,
 }: HudTopBarProps) {
   return (
@@ -73,8 +79,8 @@ export function HudTopBar({
           </div>
         </button>
 
-        {/* Compact Car Selector Docked Cleanly */}
-        <div className="flex items-center gap-1 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 p-1 rounded-xl shadow-xl">
+        {/* Compact Car Selector Docked Cleanly. Hidden while driving — see `isRunning`. */}
+        <div className={`${isRunning ? "hidden" : "flex"} items-center gap-1 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 p-1 rounded-xl shadow-xl`}>
           <button
             onClick={onPrevCar}
             aria-label="Previous car"

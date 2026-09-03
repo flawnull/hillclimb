@@ -415,3 +415,12 @@ body {
   background-repeat: repeat-y;
   background-position: center top;
 }
+
+
+/* Safari needs the prefixed property for backdrop-filter, including current iOS. Without it
+ * the loading veil is a flat translucent panel there rather than a blur of the page behind
+ * it — the effect simply does not apply, silently. */
+.vb-veil {
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}

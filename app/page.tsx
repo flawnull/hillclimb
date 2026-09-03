@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { EngineRenderState } from "@/game/Engine";
 import { TuningPanel } from "@/ui/TuningPanel";
@@ -62,6 +62,13 @@ export default function HomePage() {
   // cannot get stuck if a build is slow.
   const [sceneReady, setSceneReady] = useState<boolean>(false);
 
+  // The veil clears on the first frame the renderer draws. If that frame never comes — a
+  // WebGL context the device refuses, a build that throws while assembling the stage — the
+  // veil is all the player ever sees, with nothing to do about it and nothing said. Reported
+  // from a phone as the loading screen getting stuck. After this long it stops claiming to
+  // be loading and offers a way out.
+  const [slowLoad, setSlowLoad] = useState<boolean>(false);
+
   // Screen Wake Lock on mobile during active gameplay (§9.2)
   useWakeLock(hudState.runState);
 
@@ -108,6 +115,14 @@ export default function HomePage() {
   // Throttled HUD update callback from renderer loop (~20 Hz)
   const lastHudUpdate = useRef(0);
   const sceneReadyRef = useRef(false);
+
+  useEffect(() => {
+    if (sceneReady) return;
+    const t = window.setTimeout(() => {
+      if (!sceneReadyRef.current) setSlowLoad(true);
+    }, 12_000);
+    return () => window.clearTimeout(t);
+  }, [sceneReady]);
   const handleStateUpdate = useCallback((s: EngineRenderState) => {
     renderStateRef.current = s;
     // Once only: this runs on every rendered frame, and React would otherwise be handed a
@@ -191,6 +206,7 @@ export default function HomePage() {
           onOpenLeaderboard={() => setShowLeaderboardModal(true)}
           showTuningPanel={showTuningPanel}
           onToggleTuningPanel={toggleTuningPanel}
+          isRunning={hudState.runState === "running"}
         >
           {/* Primary Timing Display (top-centre, its own row when narrow) */}
           <TimerDisplay
@@ -259,7 +275,7 @@ export default function HomePage() {
           unclickable: the veil itself takes the pointer events. */}
       {!sceneReady && (
         <div
-          className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950/60 backdrop-blur-xl text-white font-mono"
+          className="vb-veil fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950/60 text-white font-mono"
           role="status"
           aria-live="polite"
         >
@@ -275,9 +291,24 @@ export default function HomePage() {
             <div className="vb-lane h-full w-full opacity-90" />
           </div>
 
-          <div className="text-[11px] tracking-widest text-slate-400 mt-5 uppercase">
-            Val Borbera Hillclimb
-          </div>
+          {slowLoad ? (
+            <div className="mt-5 flex flex-col items-center gap-3 px-6 text-center">
+              <div className="text-[11px] tracking-wide text-slate-300 max-w-xs leading-relaxed">
+                This is taking longer than it should. The stage may have failed to start on
+                this device.
+              </div>
+              <button
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 text-[11px] font-black tracking-widest uppercase active:scale-95 transition-transform"
+              >
+                Reload
+              </button>
+            </div>
+          ) : (
+            <div className="text-[11px] tracking-widest text-slate-400 mt-5 uppercase">
+              Val Borbera Hillclimb
+            </div>
+          )}
         </div>
       )}
 
