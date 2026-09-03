@@ -334,9 +334,10 @@ describe("Vehicle Physics & Dynamics", () => {
           // downforce * 0.95 g. Downforce is capped at +25%; using the cap keeps this an
           // upper bound rather than a restatement of the model's own arithmetic.
           const maxLatAccel = car.grip * 1.25 * 9.81 * 0.95;
-          // The model allows 15% headroom over the steady-state bound for transient rotation,
-          // and yaw takes a moment to settle after a step input, so allow a further margin.
-          const cap = (maxLatAccel / v) * 1.15 * 1.35;
+          // The model caps the TARGET at exactly the steady-state bound (no headroom — see
+          // YAW_CAP_HEADROOM), but the yaw rate converges on that target over a few frames
+          // and can overshoot slightly after a step input, so allow a transient margin.
+          const cap = (maxLatAccel / v) * 1.35;
           const excess = Math.abs(vehicle.state.yawRate) - cap;
           if (excess > worstExcess) {
             worstExcess = excess;

@@ -375,12 +375,21 @@ export class VehicleModel {
     // feeding energy back in (see the Coriolis note below); closing that leak exposed it.
     //
     // A steady turn needs lateral acceleration `v * w`, and the tyres can supply at most
-    // `gripLimit / mass`, so `w <= (gripLimit / mass) / v`. The cap is computed from the
-    // grip BEFORE the handbrake reduction and given a little headroom, because a car can
-    // transiently rotate faster than its steady-state limit — and because the handbrake is
-    // supposed to rotate the car MORE, not less. Deliberate oversteer still arrives through
-    // HANDBRAKE_YAW_MUL and the locked-axle impulse below, which act on top of this.
-    const YAW_CAP_HEADROOM = 1.15;
+    // `gripLimit / mass`, so `w <= (gripLimit / mass) / v`. The cap is computed from the grip
+    // BEFORE the handbrake reduction, because the handbrake is supposed to rotate the car
+    // MORE, not less; deliberate oversteer arrives through HANDBRAKE_YAW_MUL and the
+    // locked-axle impulse below, which act on top of this.
+    //
+    // NO HEADROOM. This was 1.15, "because a car can transiently rotate faster than its
+    // steady-state limit", and that 15% was a standing demand for more lateral force than
+    // the tyres have: the cap is applied every frame, not only in transients, so the car
+    // asked for 1.15 g from a 1.0 g tyre for the whole of every corner. The slip angle then
+    // had to climb until the tyre saturated, which meant the car was at its limit and
+    // scrubbing in EVERY bend by construction. Measured on the Weiss-Blau through a gentle
+    // sweeper — a fifth of lock at 80 km/h — it sat at 31 degrees of slip and shed 17 km/h.
+    // At 1.0 the same sweeper holds 12 degrees and loses nothing. A car cannot corner harder
+    // than its tyres; asking it to does not produce grip, it produces a slide.
+    const YAW_CAP_HEADROOM = 1.0;
     const maxLatAccel = (gripLimitBeforeHandbrake / car.mass) * YAW_CAP_HEADROOM;
     const yawCap = maxLatAccel / Math.max(2.0, Math.abs(vForward));
     const kinematicYawRate = (vForward / car.wheelbase) * detTan(targetSteerAngle);

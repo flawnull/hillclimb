@@ -102,8 +102,35 @@
  *
  *   Lap times under the old handling are not comparable: cornering now scrubs speed instead
  *   of adding it.
+ *
+ * 13 -> 14: cornering scrubbed FAR too much speed. Reported as "after you drift it suddenly
+ *   stops way too much". Two causes, compounding.
+ *
+ *   The yaw cap added in 13 carried 15% headroom over the steady-state grip limit, on the
+ *   reasoning that a car can transiently rotate faster than that. But the cap is applied
+ *   every frame, not only in transients, so the car stood asking for 1.15 g from a 1.0 g
+ *   tyre through the whole of every corner. The slip angle climbed until the tyre saturated,
+ *   which put the car at its limit and scrubbing in EVERY bend by construction. The headroom
+ *   is gone.
+ *
+ *   And CORNER_STIFFNESS was low enough that peak lateral force only arrived at 20 degrees
+ *   of slip, against six to ten for a road car — so the car had to slide two thirds of the
+ *   way to a full drift before its tyres did their best work, and that sliding is the only
+ *   real energy sink in a corner. Raised to 40, which puts the peak near 11 degrees.
+ *
+ *   Measured on the Weiss-Blau, entry speed retained through a three-second corner:
+ *     gentle sweeper (1/5 lock, 80 km/h)   78% at 31 deg slip  ->  98% at 12 deg
+ *     steady corner (half lock, 60 km/h)   55% at 35 deg       ->  89% at 13 deg
+ *     full-lock hairpin, coasting          28% at 39 deg       ->  64% at 14 deg
+ *     handbrake flick                      31% at 85 deg       ->  29% at 84 deg
+ *   The last line is the point: deliberate oversteer is untouched. What changed is that
+ *   merely steering no longer counts as one.
+ *
+ *   SLIP_SMOKE_THRESHOLD_RAD moves 6 deg -> 15 deg to match: with peak grip at 11 degrees,
+ *   a six-degree threshold lit the tyre smoke and scored drift points every time the car
+ *   changed direction.
  */
-export const SIM_VERSION = 13;
+export const SIM_VERSION = 14;
 
 /*
  * Version history — append a line whenever this is bumped.
@@ -144,7 +171,15 @@ export const GRADE_SCALE = 1.0;
 // corner became a drift whether or not you wanted one. More lateral stiffness means the
 // front end takes a set and holds it; the handbrake and throttle still break traction
 // deliberately, which is where sliding belongs.
-export const CORNER_STIFFNESS = 23.0;
+// Raised again, from 23. Peak lateral force arrives at `gripLimit / (0.12 * stiffness)` of
+// slip, and at 23 that was 0.34 rad — TWENTY DEGREES. A road car reaches peak grip around
+// six to ten. The car therefore had to slide two thirds of the way to a full drift before
+// its tyres did their best work, and the sliding is what ate the speed: the scrub that
+// removes lateral velocity is the only real energy sink in a corner. At 40 the peak lands
+// near 11 degrees, so ordinary cornering happens near the grip limit without living past
+// it, and a genuine drift — handbrake, or simply too much speed — still goes wherever the
+// player takes it.
+export const CORNER_STIFFNESS = 40.0;
 
 /** Downforce coefficient k (downforce = 1 + k * v^2) */
 export const DOWNFORCE_K = 0.00015;
@@ -213,7 +248,11 @@ export const STEERING_ASSIST_BLEND = 0.12;
 export const STEERING_ASSIST_SPEED_THRESHOLD = 25.0;
 
 /** Slip angle threshold in radians (~6 degrees) for tire smoke and squeal */
-export const SLIP_SMOKE_THRESHOLD_RAD = 0.1047; // ~6.0 deg
+// Raised from 0.1047 (6 deg). With peak grip now arriving at about 11 degrees, an ordinary
+// corner sits near that figure, and a six-degree threshold lit the tyre smoke and started
+// scoring drift points every time the car changed direction. Smoke should mean the car is
+// actually sliding, not merely cornering.
+export const SLIP_SMOKE_THRESHOLD_RAD = 0.2618; // ~15.0 deg
 
 /** Maximum slip angle for drift scoring calculations (~25 degrees) */
 export const MAX_DRIFT_SLIP_RAD = 0.4363; // ~25 deg
