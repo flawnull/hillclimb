@@ -153,8 +153,13 @@ export class TerrainSystem {
      */
     const shade = (k: number, x: number, y: number, z: number): void => {
       const grain = Math.sin(x * 0.61 + z * 0.43) * 0.5 + 0.5;
-      const f = k * (0.93 + grain * 0.07);
-      colors.push(0.604 * f, 0.569 * f, 0.529 * f);
+      const f = k * (0.88 + grain * 0.12);
+      // Weathered concrete, not fresh render. The old tone (0.604, 0.569, 0.529) was lighter
+      // than the sunlit grass around it, so a retaining wall or a pier read as a blank white
+      // sheet pasted over the hillside — the brightest thing in the frame, which is the last
+      // thing a piece of background engineering should be. Darker and slightly cooler puts it
+      // behind the landscape instead of in front of it.
+      colors.push(0.44 * f, 0.435 * f, 0.42 * f);
     };
 
     /**
@@ -292,7 +297,7 @@ export class TerrainSystem {
             // Darker at the foot — a wall lit by one directional light and painted in a
             // single flat tone reads as cut cardboard however well it is placed — with
             // alternate rows stepped, which is what makes the courses visible.
-            shade((1 - f * 0.38) * (row % 2 === 0 ? 1 : 0.9), p.x, y, p.z);
+            shade((1 - f * 0.45) * (row % 2 === 0 ? 1 : 0.84), p.x, y, p.z);
           }
         }
         const stride = WALL_ROWS + 1;
@@ -379,15 +384,19 @@ export class TerrainSystem {
     // earth, which is exactly the thing a viaduct exists to avoid. A pier either reaches the
     // ground or is not emitted at all (see the blocking check above).
     for (const p of piers) {
-      // Chunky enough to read as a concrete pier at speed rather than as a wire.
-      const half = 0.95;
+      // Chunky enough to read as a concrete pier at speed rather than as a wire, and TAPERED:
+      // a bridge pier is wider at the base than at the head, and a plain extruded rectangle
+      // is the shape that reads as a blank slab. The taper alone gives the silhouette a
+      // direction, which is most of what separates "column" from "sheet" at a glance.
+      const halfTop = 0.80;
+      const halfBottom = 1.25;
       const bottom = p.bottom;
       const base = verts.length / 3;
-      for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
-        verts.push(p.x + dx, p.top, p.z + dz);
-        shade(0.94, p.x + dx, p.top, p.z + dz);
-        verts.push(p.x + dx, bottom, p.z + dz);
-        shade(0.55, p.x + dx, bottom, p.z + dz);
+      for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]] as const) {
+        verts.push(p.x + sx * halfTop, p.top, p.z + sz * halfTop);
+        shade(1.0, p.x + sx * halfTop, p.top, p.z + sz * halfTop);
+        verts.push(p.x + sx * halfBottom, bottom, p.z + sz * halfBottom);
+        shade(0.5, p.x + sx * halfBottom, bottom, p.z + sz * halfBottom);
       }
       for (let f = 0; f < 4; f++) {
         const a = base + f * 2;

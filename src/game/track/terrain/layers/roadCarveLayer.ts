@@ -136,6 +136,25 @@ const MAX_CUT_SLOPE = 3.0;
  * guarantee is 0.25 m. This is the same band the deleted clearance clamp used to cover —
  * `max(halfWidth) + VERGE_WIDTH = 6.6 m` across every stage — so holding the ceiling flat
  * across it restores the guarantee by construction rather than by tolerance.
+ *
+ * TRIED AND REJECTED: narrowing this to `VERGE_WIDTH + 0.8`. The 6.6 figure was derived as
+ * `max(halfWidth) + VERGE_WIDTH`, and the expression it feeds already subtracts
+ * `h.sample.halfWidth` separately, so the effective flat zone is `halfWidth + 6.6` — the
+ * road's own width is counted twice. Removing the double count does exactly what the
+ * arithmetic predicts: on Salita di Cosola the route carried on viaduct falls from 5.2% to
+ * 3.7% and on retaining wall from 2.3% to 1.3%, because the terrain can then climb from a
+ * lower switchback leg to the one above instead of leaving it to be carried on structure.
+ *
+ * It also makes the game unrecognisable. With the ceiling free to rise 3 m for every metre
+ * starting two metres off the verge, and the support floor pushing the ground up against it,
+ * the hillside closes in on the carriageway as a pair of near-vertical angular walls — the
+ * stage reads as a slot canyon rather than a mountain road. The wide flat zone is not a
+ * mistake to be tidied away; it is what keeps the ground beside the road looking like ground.
+ * The structure it costs is the cheaper price.
+ *
+ * Raising MAX_CUT_SLOPE instead does not help either: at 4.5, 6.0 and 8.0 the viaduct share
+ * stays at 3.7%. Those spans are genuinely stacked — a leg within about ten metres in plan
+ * and twenty below — and no single-valued heightfield can be under both.
  */
 const CEIL_FLAT = 6.6;
 
