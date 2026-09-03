@@ -129,8 +129,19 @@
  *   SLIP_SMOKE_THRESHOLD_RAD moves 6 deg -> 15 deg to match: with peak grip at 11 degrees,
  *   a six-degree threshold lit the tyre smoke and scored drift points every time the car
  *   changed direction.
+ *
+ * 14 -> 15: stage geometry. Salita di Cosola's tornanti turn 140 degrees rather than 160-170.
+ *   A hairpin's arc decides how far the road drifts sideways each time it doubles back, and
+ *   at arcs near 180 it barely drifts at all — it climbs in place, over its own lower legs,
+ *   which a single-valued heightfield cannot support. That is what put a quarter of the
+ *   middle sector on viaduct and filled the view with concrete columns. At 140 the route
+ *   spreads across the hillside instead: the verge standing more than 16 m above the ground
+ *   goes from 3.7% of the stage to 0.0%, and retaining wall from 2.3% to 0.0%. The corners
+ *   are unchanged in tightness — radius is untouched, the tightest driven radius is still
+ *   7.6 m and all twelve tornanti still register — but the stage is 2.36 km rather than 2.43
+ *   and climbs 175 m rather than 270, so times are not comparable.
  */
-export const SIM_VERSION = 14;
+export const SIM_VERSION = 15;
 
 /*
  * Version history — append a line whenever this is bumped.

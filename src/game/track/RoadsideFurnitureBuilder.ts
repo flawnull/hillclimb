@@ -214,6 +214,13 @@ export function buildRoadsideFurniture(
         // run that changes exposure does not draw a beam diagonally across the carriageway.
         const nextSideSign =
           nextGuardS.exposure === "both" ? sideSign : nextGuardS.exposure === "left" ? -1 : 1;
+        // And where the sides genuinely differ — the exposure flips from one side of the
+        // road to the other between two guarded samples — the run must BREAK rather than
+        // reach across. Following the side through was not enough on its own: with
+        // `exposure: 'left'` next to `exposure: 'right'`, this beam spanned the full width
+        // of the carriageway at windscreen height, a solid steel bar straight across the
+        // road you are driving down.
+        if (nextSideSign !== sideSign) continue;
         const nextHw = clearOffset(samples, nextGuardS, nextSideSign, nextBaseHw, 0.35);
         if (nextHw === null) continue;
         const nextPosX = nextGuardS.x + nextGuardS.normalX * nextHw * nextSideSign;

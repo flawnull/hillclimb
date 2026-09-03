@@ -152,6 +152,47 @@ describe("Guardrails are drawn wherever the physics puts a wall", () => {
   }
 });
 
+describe("Nothing spans the carriageway", () => {
+  for (const entry of STAGE_LIST) {
+    const stageId = entry.id;
+
+    it(`${stageId}: no guardrail beam crosses the road`, () => {
+      const { samples, guardrails } = BUILDS.get(stageId)!;
+
+      // A beam is a long thin box rotated to lie along the rail. Its two ends are what
+      // matter: if they fall on opposite sides of the centreline, the beam is a steel bar
+      // across the road at windscreen height. That is what a run of rail did when the
+      // stage's `exposure` flipped from one side to the other between two guarded samples.
+      let crossing = 0;
+      let first = "";
+      guardrails.updateMatrixWorld(true);
+      guardrails.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        const params = (mesh.geometry as THREE.BoxGeometry).parameters;
+        if (!params || params.depth < 1.5) return; // posts and reflectors are not beams
+
+        const half = params.depth / 2;
+        const ends = [new THREE.Vector3(0, 0, -half), new THREE.Vector3(0, 0, half)].map((v) =>
+          v.applyMatrix4(mesh.matrixWorld)
+        );
+        const t = ends.map((e) => projectNear(samples, e.x, e.y, e.z)?.t);
+        if (t[0] === undefined || t[1] === undefined) return;
+        if (Math.sign(t[0]) !== Math.sign(t[1])) {
+          crossing++;
+          if (!first) first = `ends at t = ${t[0].toFixed(1)} and ${t[1].toFixed(1)} m`;
+        }
+      });
+
+      assert.strictEqual(
+        crossing,
+        0,
+        `${stageId}: ${crossing} guardrail beams span the carriageway (first: ${first})`
+      );
+    });
+  }
+});
+
 describe("Corner furniture is on the correct side of the corner", () => {
   /**
    * Which way the road turns at arc length `s`, measured the way the height field and the
