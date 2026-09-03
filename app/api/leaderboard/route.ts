@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRedis } from "@/lib/redis";
+import { toScoredMembers } from "@/lib/zrange";
 import { SIM_VERSION } from "@/game/vehicle/vehicleTuning";
 
 export const runtime = "edge";
@@ -32,18 +33,17 @@ export async function GET(req: NextRequest) {
     const redis = getRedis();
     const lbKey = `lb:${sim}:${stageId}:${carClass}`;
 
-    // Read top N run IDs with scores
-    const topRuns = await redis.zrange(lbKey, 0, limit - 1, { withScores: true });
+    // Read top N run IDs with scores. `toScoredMembers` normalises Upstash's flat
+    // [member, score, ...] reply, which this route used to misread — see src/lib/zrange.ts.
+    const topRuns = toScoredMembers(await redis.zrange(lbKey, 0, limit - 1, { withScores: true }));
 
-    if (!topRuns || topRuns.length === 0) {
+    if (topRuns.length === 0) {
       return NextResponse.json({ stageId, carClass, simVersion: sim, entries: [] });
     }
 
     const entries = [];
     for (let i = 0; i < topRuns.length; i++) {
-      const item = topRuns[i] as { member: string; score: number } | string;
-      const member = typeof item === "string" ? item : item.member;
-      const scoreMs = typeof item === "string" ? 0 : item.score;
+      const { member, score: scoreMs } = topRuns[i];
 
       // Try per-player entry hash first, then fallback to run ID hash
       let runData = (await redis.hgetall(`entry:${sim}:${stageId}:${carClass}:${member}`)) as RunRecord | null;
