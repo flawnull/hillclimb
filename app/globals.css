@@ -417,9 +417,29 @@ body {
 }
 
 
-/* Safari needs the prefixed property for backdrop-filter, including current iOS. Without it
- * the loading veil is a flat translucent panel there rather than a blur of the page behind
- * it — the effect simply does not apply, silently. */
+/* ── Loading veil ─────────────────────────────────────────────────────────
+ * The HUD IS HIDDEN WHILE LOADING, rather than blurred behind a veil.
+ *
+ * Blurring was the original approach and it does not survive contact with Safari:
+ * captured in WebKit, `backdrop-filter` simply did not apply — prefixed or not — so
+ * the loading screen was a dark translucent panel with the stage banner, the timer,
+ * every action button, the speedometer, the pedals and the "TAP TO START" prompt fully
+ * legible through it, the prompt landing squarely on top of the word LOADING. That is
+ * the reported "I see the buttons clearly while it's loading", and adding the
+ * `-webkit-` prefix did not fix it.
+ *
+ * Not drawing the HUD is better than obscuring it, and it behaves identically in every
+ * engine. Visibility rather than `display: none` so nothing re-layouts on reveal, and
+ * the controls keep their mounted state — TouchControls owns the pointer plumbing and
+ * must not be torn down and rebuilt just because a frame has not been drawn yet.
+ */
+.hud-loading .hud-grid,
+.hud-loading .hud-dock-bg,
+.hud-loading .hud-start-prompt {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .vb-veil {
   -webkit-backdrop-filter: blur(24px);
   backdrop-filter: blur(24px);

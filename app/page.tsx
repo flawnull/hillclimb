@@ -157,7 +157,7 @@ export default function HomePage() {
   };
 
   return (
-    <main className="hud-root w-screen h-screen bg-slate-950 text-white font-sans select-none">
+    <main className={`hud-root w-screen h-screen bg-slate-950 text-white font-sans select-none${sceneReady ? "" : " hud-loading"}`}>
       {/* 3D Canvas. Full-bleed in landscape; the top 62% in portrait (§9.1) —
           see .hud-stage in app/globals.css. */}
       <div className="hud-stage">
@@ -174,7 +174,7 @@ export default function HomePage() {
         {/* Prominent Tap to Start Prompt — centred on the canvas, not on the
             portrait control dock. */}
         {hudState.runState === "ready" && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none p-4">
+          <div className="hud-start-prompt absolute inset-0 z-30 flex items-center justify-center pointer-events-none p-4">
             <button
               onClick={handleStartRace}
               className="pointer-events-auto flex items-center gap-3 px-5 sm:px-8 py-3.5 sm:py-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-mono font-black text-xs sm:text-base tracking-wider rounded-2xl shadow-2xl shadow-amber-500/40 border-2 border-amber-300 active:scale-95 transition-transform backdrop-blur-md animate-pulse uppercase text-center"
@@ -275,7 +275,7 @@ export default function HomePage() {
           unclickable: the veil itself takes the pointer events. */}
       {!sceneReady && (
         <div
-          className="vb-veil fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950/60 text-white font-mono"
+          className="vb-veil fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950 text-white font-mono"
           role="status"
           aria-live="polite"
         >
