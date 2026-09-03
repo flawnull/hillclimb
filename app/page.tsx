@@ -70,6 +70,8 @@ export default function HomePage() {
   const [slowLoad, setSlowLoad] = useState<boolean>(false);
   /** 0..1 across the stage build, reported by the renderer while it slices the terrain. */
   const [buildProgress, setBuildProgress] = useState<number>(0);
+  /** True while a stage is generating, including a switch after the first load. */
+  const [building, setBuilding] = useState<boolean>(true);
 
   // Screen Wake Lock on mobile during active gameplay (§9.2)
   useWakeLock(hudState.runState);
@@ -159,7 +161,7 @@ export default function HomePage() {
   };
 
   return (
-    <main className={`hud-root w-screen h-screen bg-slate-950 text-white font-sans select-none${sceneReady ? "" : " hud-loading"}`}>
+    <main className={`hud-root w-screen h-screen bg-slate-950 text-white font-sans select-none${sceneReady && !building ? "" : " hud-loading"}`}>
       {/* 3D Canvas. Full-bleed in landscape; the top 62% in portrait (§9.1) —
           see .hud-stage in app/globals.css. */}
       <div className="hud-stage">
@@ -172,6 +174,7 @@ export default function HomePage() {
           qualityTier={settings.qualityTier}
           onStateUpdate={handleStateUpdate}
           onBuildProgress={setBuildProgress}
+          onBuildingChange={setBuilding}
         />
 
         {/* Prominent Tap to Start Prompt — centred on the canvas, not on the
@@ -276,7 +279,7 @@ export default function HomePage() {
           Fixed and above the HUD grid (z-20) and the tap-to-start prompt (z-30), so the
           controls behind it are genuinely blurred and genuinely inert rather than merely
           unclickable: the veil itself takes the pointer events. */}
-      {!sceneReady && (
+      {(!sceneReady || building) && (
         <div
           className="vb-veil fixed inset-0 z-[60] flex flex-col items-center justify-center bg-slate-950 text-white font-mono"
           role="status"

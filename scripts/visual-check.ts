@@ -56,7 +56,15 @@ async function waitForRendererReady(page: Page): Promise<void> {
       !!(window as any).__vbCamera &&
       !!(window as any).__vbSpline &&
       typeof (window as any).__vbSpline.totalLength === "number" &&
-      (window as any).__vbSpline.totalLength > 0,
+      (window as any).__vbSpline.totalLength > 0 &&
+      // The terrain is built asynchronously in slices so the browser can paint the loading
+      // screen (see GameCanvas). The renderer, camera and spline all exist well before that
+      // finishes, so waiting on them alone captured the loading screen instead of the stage.
+      // `hasTrack()` is the signal that the surface is actually in the scene.
+      (window as any).__vbRenderer.hasTrack?.() === true &&
+      // And the loading veil is gone. `hasTrack()` alone is already true from the PREVIOUS
+      // stage during a switch, so it cannot tell whether the new stage has finished.
+      !document.querySelector('[role="status"]'),
     { timeout: 30_000 }
   );
 }
@@ -83,11 +91,17 @@ async function selectStage(page: Page, stage: StageMeta): Promise<void> {
     { timeout: 15_000 }
   );
 
-  // Let rebuildTrack() finish swapping window.__vbSpline over.
+  // Let the stage swap finish. `__vbSpline` is set at the START of the rebuild, so waiting
+  // on it alone returns while the terrain is still being generated.
   await page.waitForFunction(
     () =>
-      !!(window as any).__vbSpline && (window as any).__vbSpline.totalLength > 0,
-    { timeout: 15_000 }
+      !!(window as any).__vbSpline &&
+      (window as any).__vbSpline.totalLength > 0 &&
+      (window as any).__vbRenderer.hasTrack?.() === true &&
+      // And the loading veil is gone. `hasTrack()` alone is already true from the PREVIOUS
+      // stage during a switch, so it cannot tell whether the new stage has finished.
+      !document.querySelector('[role="status"]'),
+    { timeout: 30_000 }
   );
 }
 

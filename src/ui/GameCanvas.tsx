@@ -17,6 +17,8 @@ interface GameCanvasProps {
   onStateUpdate?: (s: EngineRenderState) => void;
   /** 0..1 across the stage build. See the async build in the effect below. */
   onBuildProgress?: (fraction: number) => void;
+  /** True while a stage is being generated — on first load AND on every stage switch. */
+  onBuildingChange?: (building: boolean) => void;
 }
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({
@@ -27,6 +29,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   qualityTier = "high",
   onStateUpdate,
   onBuildProgress,
+  onBuildingChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
@@ -72,7 +75,9 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
     void (async () => {
       if (spline && !renderer.hasTrack()) {
+        onBuildingChange?.(true);
         await renderer.rebuildTrackAsync(spline, yieldTo, onBuildProgress);
+        onBuildingChange?.(false);
       }
       if (!cancelled) renderer.start(engine, onStateUpdate);
     })();
@@ -108,8 +113,15 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     if (builtSplineRef.current === spline) return;
     builtSplineRef.current = spline;
     const yieldTo = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-    void renderer.rebuildTrackAsync(spline, yieldTo, onBuildProgress);
-  }, [spline, onBuildProgress]);
+    // The veil comes back for a stage switch too. `prepareTrack` clears the old terrain
+    // before the new one starts generating, so without this the player watches a road and
+    // a row of houses hanging in an empty sky for the several seconds the build takes.
+    onBuildingChange?.(true);
+    onBuildProgress?.(0);
+    void renderer
+      .rebuildTrackAsync(spline, yieldTo, onBuildProgress)
+      .then(() => onBuildingChange?.(false));
+  }, [spline, onBuildProgress, onBuildingChange]);
 
   // Synchronize car definition and colorway changes
   useEffect(() => {
