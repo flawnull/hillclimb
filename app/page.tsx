@@ -68,6 +68,8 @@ export default function HomePage() {
   // from a phone as the loading screen getting stuck. After this long it stops claiming to
   // be loading and offers a way out.
   const [slowLoad, setSlowLoad] = useState<boolean>(false);
+  /** 0..1 across the stage build, reported by the renderer while it slices the terrain. */
+  const [buildProgress, setBuildProgress] = useState<number>(0);
 
   // Screen Wake Lock on mobile during active gameplay (§9.2)
   useWakeLock(hudState.runState);
@@ -169,6 +171,7 @@ export default function HomePage() {
           spline={spline}
           qualityTier={settings.qualityTier}
           onStateUpdate={handleStateUpdate}
+          onBuildProgress={setBuildProgress}
         />
 
         {/* Prominent Tap to Start Prompt — centred on the canvas, not on the
@@ -286,9 +289,17 @@ export default function HomePage() {
             <span className="vb-dot" style={{ animationDelay: "400ms" }}>.</span>
           </div>
 
-          {/* A stretch of road with its centre line running past. */}
+          {/* A stretch of road, filling in as the stage is built. Real progress rather than
+              an indeterminate loop: the terrain reports where it is, and on a slow device
+              the difference between "working" and "hung" is the whole question. */}
           <div className="mt-6 w-56 sm:w-72 h-3 rounded-full bg-slate-800/80 overflow-hidden border border-slate-700/70">
-            <div className="vb-lane h-full w-full opacity-90" />
+            <div
+              className="vb-lane h-full opacity-90 transition-[width] duration-200 ease-linear"
+              style={{ width: `${Math.max(4, Math.round(buildProgress * 100))}%` }}
+            />
+          </div>
+          <div className="mt-2 text-[10px] tracking-widest text-slate-500 tabular-nums">
+            {Math.round(buildProgress * 100)}%
           </div>
 
           {slowLoad ? (

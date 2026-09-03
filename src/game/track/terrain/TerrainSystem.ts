@@ -10,7 +10,7 @@ import * as THREE from "three";
 import { TrackSpline, SplineSample } from "../TrackSpline";
 import { chunkMeshBySpace } from "../batchStatics";
 import { createHeightField, HeightField } from "./heightField";
-import { buildChunkedTerrain } from "./TerrainMeshBuilder";
+import { buildChunkedTerrain, buildChunkedTerrainAsync } from "./TerrainMeshBuilder";
 import { buildInstancedVegetation } from "../VegetationScatterBuilder";
 import { BuildingFootprint } from "../HamletBuilder";
 
@@ -56,12 +56,37 @@ export class TerrainSystem {
   public readonly embankmentMesh: THREE.Group;
   private readonly spline: TrackSpline;
 
-  constructor(spline: TrackSpline, field?: HeightField, buildings: BuildingFootprint[] = []) {
+  /**
+   * Builds the terrain a slice at a time, handing control back to the caller in between.
+   *
+   * Terrain generation is essentially the whole of a stage's load time — 2.7 s for Borbera
+   * Sprint and 3.6 s for Salita di Cosola, against 15-25 ms for vegetation — and being
+   * synchronous it stops the browser painting for the duration. Nothing else here is worth
+   * slicing; everything but the surface is a rounding error.
+   */
+  static async createAsync(
+    spline: TrackSpline,
+    field: HeightField,
+    buildings: BuildingFootprint[],
+    yieldTo: () => Promise<void>,
+    onProgress?: (fraction: number) => void
+  ): Promise<TerrainSystem> {
+    const mesh = await buildChunkedTerrainAsync(field, yieldTo, onProgress);
+    return new TerrainSystem(spline, field, buildings, mesh);
+  }
+
+  constructor(
+    spline: TrackSpline,
+    field?: HeightField,
+    buildings: BuildingFootprint[] = [],
+    /** A surface already built by `createAsync`. Omitted, the constructor builds its own. */
+    prebuiltMesh?: THREE.Group
+  ) {
     this.spline = spline;
     // Accepts a field the caller already built, so the renderer can ground roadside buildings
     // on the same terrain without paying to construct it twice.
     this.field = field ?? createHeightField(spline);
-    this.mesh = buildChunkedTerrain(this.field);
+    this.mesh = prebuiltMesh ?? buildChunkedTerrain(this.field);
     this.riverMesh = chunkMeshBySpace(this.buildRiverMesh(), 250);
     this.vegetationGroup = new THREE.Group();
     buildInstancedVegetation(spline, this.field, this.vegetationGroup, buildings);

@@ -15,6 +15,8 @@ interface GameCanvasProps {
   spline?: TrackSpline;
   qualityTier?: QualityTier;
   onStateUpdate?: (s: EngineRenderState) => void;
+  /** 0..1 across the stage build. See the async build in the effect below. */
+  onBuildProgress?: (fraction: number) => void;
 }
 
 export const GameCanvas: React.FC<GameCanvasProps> = ({
@@ -24,6 +26,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   spline,
   qualityTier = "high",
   onStateUpdate,
+  onBuildProgress,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<GameRenderer | null>(null);
@@ -51,10 +54,31 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     }
 
     renderer.setQualityTier(qualityTier);
-    renderer.start(engine, onStateUpdate);
     rendererRef.current = renderer;
 
+    // Build the track asynchronously, then start the loop.
+    //
+    // Terrain generation takes two and a half to three and a half seconds and used to run
+    // inside the GameRenderer constructor, where it blocked the browser for the whole
+    // duration: the loading screen appeared, froze solid, and vanished. Nothing could be
+    // painted, so no animation on it could ever run. It is now built a slice at a time with
+    // a macrotask between slices, which lets the page paint and report real progress.
+    //
+    // `setTimeout(0)` rather than rAF: a rAF callback runs BEFORE paint, so yielding to one
+    // hands control back without the frame having been drawn. A macrotask lets the frame
+    // complete first, which is the point.
+    let cancelled = false;
+    const yieldTo = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+
+    void (async () => {
+      if (spline && !renderer.hasTrack()) {
+        await renderer.rebuildTrackAsync(spline, yieldTo, onBuildProgress);
+      }
+      if (!cancelled) renderer.start(engine, onStateUpdate);
+    })();
+
     return () => {
+      cancelled = true;
       renderer?.stop();
     };
   }, [engine]);
@@ -71,12 +95,21 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     };
   }, []);
 
-  // Synchronize stage spline changes
+  // Synchronize stage spline changes. Skips the spline the initial build already used, so
+  // the two cannot race on first mount.
+  const builtSplineRef = useRef<TrackSpline | undefined>(undefined);
   useEffect(() => {
-    if (rendererRef.current && spline) {
-      rendererRef.current.rebuildTrack(spline);
+    const renderer = rendererRef.current;
+    if (!renderer || !spline) return;
+    if (builtSplineRef.current === undefined) {
+      builtSplineRef.current = spline;
+      return;
     }
-  }, [spline]);
+    if (builtSplineRef.current === spline) return;
+    builtSplineRef.current = spline;
+    const yieldTo = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    void renderer.rebuildTrackAsync(spline, yieldTo, onBuildProgress);
+  }, [spline, onBuildProgress]);
 
   // Synchronize car definition and colorway changes
   useEffect(() => {

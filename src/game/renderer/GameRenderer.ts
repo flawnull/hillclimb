@@ -9,7 +9,8 @@ import { CarDef } from "../vehicle/cars";
 import { TrackSpline } from "../track/TrackSpline";
 import { RoadMesh } from "../track/RoadMesh";
 import { TerrainSystem } from "../track/terrain/TerrainSystem";
-import { createHeightField } from "../track/terrain/heightField";
+import { createHeightField, type HeightField } from "../track/terrain/heightField";
+import type { BuildingFootprint } from "../track/HamletBuilder";
 import { QualityTier } from "@/store/gameStore";
 import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
@@ -215,9 +216,10 @@ export class GameRenderer {
     this.cameraController = new ChaseCameraController();
     this.effectsManager = new EffectsManager(this.scene);
 
-    if (this.activeSpline) {
-      this.rebuildTrack(this.activeSpline);
-    }
+    // The track is NOT built here. Terrain generation blocks for two and a half to three
+    // and a half seconds, and doing it in the constructor means the browser cannot paint
+    // the loading screen for that whole time — the screen appears, freezes solid, and
+    // vanishes. The caller builds it with `rebuildTrackAsync` and gets progress instead.
 
     // 5. Build Vehicle 3D Model
     this.carGroup = new THREE.Group();
@@ -228,7 +230,41 @@ export class GameRenderer {
     window.addEventListener("resize", this.handleResize);
   }
 
+  /**
+   * Interruptible track build. Same result as `rebuildTrack`, but the terrain surface is
+   * generated a slice at a time with `yieldTo` awaited in between, so the page keeps
+   * painting. `onProgress` reports 0..1 across the terrain, which is effectively the whole
+   * of the load.
+   */
+  public async rebuildTrackAsync(
+    spline: TrackSpline,
+    yieldTo: () => Promise<void>,
+    onProgress?: (fraction: number) => void
+  ): Promise<void> {
+    const prepared = this.prepareTrack(spline);
+    this.terrain = await TerrainSystem.createAsync(
+      spline,
+      prepared.field,
+      prepared.buildings,
+      yieldTo,
+      onProgress
+    );
+    this.attachTerrain();
+  }
+
+  /** True once a track has been built into the scene. */
+  public hasTrack(): boolean {
+    return this.terrain !== null;
+  }
+
   public rebuildTrack(spline: TrackSpline): void {
+    const prepared = this.prepareTrack(spline);
+    this.terrain = new TerrainSystem(spline, prepared.field, prepared.buildings);
+    this.attachTerrain();
+  }
+
+  /** Everything up to the terrain: the shared height field, the road, and its props. */
+  private prepareTrack(spline: TrackSpline): { field: HeightField; buildings: BuildingFootprint[] } {
     this.activeSpline = spline;
     this.cameraController.reset();
 
@@ -274,12 +310,18 @@ export class GameRenderer {
     this.trackGroup.add(this.roadMesh.guardrailGroup);
     this.trackGroup.add(this.roadMesh.landmarkGroup);
 
-    // 2. Build the unified terrain surface, river and vegetation. There is no separate
-    // backdrop mesh: near ground and distant mountains are one continuous surface.
+    // The road mesh is built first (above), so its hamlet footprints are available to the
+    // terrain and the vegetation scatter can avoid growing trees through the houses.
     this.terrain?.dispose();
-    // The road mesh is built first (above), so its hamlet footprints are available here and
-    // the vegetation scatter can avoid growing trees through the houses.
-    this.terrain = new TerrainSystem(spline, field, this.roadMesh.buildingFootprints);
+    return { field, buildings: this.roadMesh.buildingFootprints };
+  }
+
+  /**
+   * 2. Attach the unified terrain surface, river and vegetation. There is no separate
+   * backdrop mesh: near ground and distant mountains are one continuous surface.
+   */
+  private attachTerrain(): void {
+    if (!this.terrain) return;
     this.trackGroup.add(this.terrain.mesh);
     this.trackGroup.add(this.terrain.riverMesh);
     this.trackGroup.add(this.terrain.vegetationGroup);

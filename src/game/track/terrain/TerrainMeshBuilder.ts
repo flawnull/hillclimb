@@ -203,7 +203,19 @@ function reliefOf(field: HeightField, x: number, z: number, size: number): numbe
   return hi - lo;
 }
 
-export function buildTerrainMesh(field: HeightField): THREE.Mesh {
+/**
+ * Interruptible terrain build.
+ *
+ * Returns a handle rather than a mesh: call `step()` until it returns false, then `finish()`.
+ * The work per `step()` is one top-level square of the quadtree, which lets a browser caller
+ * paint between slices instead of freezing for the whole build. `buildTerrainMesh` below
+ * drains it in one go for callers that do not care.
+ */
+export function beginTerrainMesh(field: HeightField): {
+  step: () => boolean;
+  finish: () => THREE.Mesh;
+  sliceCount: number;
+} {
   const { minX, maxX, minZ, maxZ } = field.bounds;
 
   // Square root cell, side rounded up to a power-of-two multiple of MIN_LEAF so that
@@ -416,8 +428,37 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
     subdivide(x + h, z + h, h);
   };
 
-  subdivide(cx0, cz0, root);
+  // Split the root into a grid of top-level squares and walk them one at a time, so the
+  // caller can stop between them. The quadtree recursion below each square is unchanged;
+  // this only decides the ORDER and gives the work a seam to be interrupted at.
+  //
+  // Terrain generation is the whole of the loading time — measured at 2.7 s for Borbera
+  // Sprint and 3.6 s for Salita di Cosola, against 15-25 ms for vegetation and 50-120 ms
+  // for the road and its props — and it is synchronous, so the browser cannot paint for
+  // the duration. That is why the loading animation freezes: it is not the animation, it is
+  // that nothing at all can be drawn while this runs. The cost is inherent to the carve
+  // (each vertex resolves 435 road samples on Borbera and 911 on Salita, three times over
+  // for the slope probe), so it is not going away; it can only be made interruptible.
+  const SLICE_GRID = 16;
+  const sliceSize = root / SLICE_GRID;
+  const slices: [number, number][] = [];
+  for (let iz = 0; iz < SLICE_GRID; iz++) {
+    for (let ix = 0; ix < SLICE_GRID; ix++) {
+      slices.push([cx0 + ix * sliceSize, cz0 + iz * sliceSize]);
+    }
+  }
 
+  let nextSlice = 0;
+
+  /** Builds one slice. Returns false once every slice has been built. */
+  const step = (): boolean => {
+    if (nextSlice >= slices.length) return false;
+    const [sx, sz] = slices[nextSlice++];
+    subdivide(sx, sz, sliceSize);
+    return true;
+  };
+
+  const finish = (): THREE.Mesh => {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
@@ -484,7 +525,21 @@ export function buildTerrainMesh(field: HeightField): THREE.Mesh {
     skirtTriangleCount,
     surfaceTriangleCount: indices.length / 3 - skirtTriangleCount,
   };
-  return mesh;
+    return mesh;
+  };
+
+  return { step, finish, sliceCount: slices.length };
+}
+
+/**
+ * The whole surface in one call — what tests and any headless caller want.
+ */
+export function buildTerrainMesh(field: HeightField): THREE.Mesh {
+  const build = beginTerrainMesh(field);
+  while (build.step()) {
+    /* drain */
+  }
+  return build.finish();
 }
 
 /** Frustum-cullable form: the same surface, split into 250 m spatial chunks. */
@@ -506,4 +561,27 @@ const TERRAIN_CHUNK_M = 800;
 
 export function buildChunkedTerrain(field: HeightField): THREE.Group {
   return chunkMeshBySpace(buildTerrainMesh(field), TERRAIN_CHUNK_M);
+}
+
+/**
+ * The same thing, built a slice at a time with a chance to breathe in between.
+ *
+ * `onProgress` is called with 0..1 after each slice. `yieldTo` is awaited between slices —
+ * the caller decides how to hand control back to the browser, and how often; passing a
+ * function that resolves on a macrotask lets the page paint the loading screen, which it
+ * otherwise cannot do at all for the two and a half to three and a half seconds this takes.
+ */
+export async function buildChunkedTerrainAsync(
+  field: HeightField,
+  yieldTo: () => Promise<void>,
+  onProgress?: (fraction: number) => void
+): Promise<THREE.Group> {
+  const build = beginTerrainMesh(field);
+  let done = 0;
+  while (build.step()) {
+    done++;
+    onProgress?.(done / build.sliceCount);
+    await yieldTo();
+  }
+  return chunkMeshBySpace(build.finish(), TERRAIN_CHUNK_M);
 }
