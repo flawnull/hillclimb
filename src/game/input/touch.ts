@@ -81,20 +81,44 @@ export class TouchController {
     this.notify(0, false);
   };
 
+  /**
+   * Pushes the pedal axes to EXACTLY what the currently-held pointers say.
+   *
+   * The axes used to be poked one at a time, each press setting its own to 1 and each
+   * release setting its own to 0. That leaves a pedal held by nothing whenever an update
+   * loses track of what a pointer was previously on: `pressButton` overwrote the pointer's
+   * map entry, so a pointer that went from the brake to the throttle replaced "brake" with
+   * "throttle" and left the brake axis at 1 with no entry able to clear it. Releasing gave
+   * back the throttle and nothing else — the brake stayed on for the rest of the run, the
+   * car would not move, and no amount of pressing anything could recover it, which is the
+   * reported bug.
+   *
+   * Deriving all three axes from the map instead makes that unrepresentable: an axis is on
+   * if and only if some pointer is currently holding it, so any bookkeeping mistake costs
+   * at worst one frame of a wrong axis rather than latching one on forever.
+   */
+  private syncButtonAxes(): void {
+    let throttle = 0;
+    let brake = 0;
+    let handbrake = false;
+    for (const which of this.buttonPointers.values()) {
+      if (which === "throttle") throttle = 1.0;
+      else if (which === "brake") brake = 1.0;
+      else handbrake = true;
+    }
+    this.inputManager.setTouchAxes({ throttle, brake, handbrake });
+  }
+
   /** Registers a pedal or handbrake press against the pointer holding it. */
   public pressButton(pointerId: number, which: "throttle" | "brake" | "handbrake"): void {
     this.buttonPointers.set(pointerId, which);
-    if (which === "handbrake") this.inputManager.setTouchAxes({ handbrake: true });
-    else this.inputManager.setTouchAxes({ [which]: 1.0 } as { throttle?: number; brake?: number });
+    this.syncButtonAxes();
   }
 
   /** Releases whatever that pointer was holding, if anything. */
   public releaseButton(pointerId: number): void {
-    const which = this.buttonPointers.get(pointerId);
-    if (which === undefined) return;
-    this.buttonPointers.delete(pointerId);
-    if (which === "handbrake") this.inputManager.setTouchAxes({ handbrake: false });
-    else this.inputManager.setTouchAxes({ [which]: 0.0 } as { throttle?: number; brake?: number });
+    if (!this.buttonPointers.delete(pointerId)) return;
+    this.syncButtonAxes();
   }
 
   public onStateChange(cb: (state: TouchSliderState) => void): void {
@@ -143,18 +167,6 @@ export class TouchController {
 
   public handlePointerCancel(e: React.PointerEvent | PointerEvent): void {
     this.handlePointerUp(e);
-  }
-
-  public setThrottle(val: number): void {
-    this.inputManager.setTouchAxes({ throttle: val });
-  }
-
-  public setBrake(val: number): void {
-    this.inputManager.setTouchAxes({ brake: val });
-  }
-
-  public setHandbrake(val: boolean): void {
-    this.inputManager.setTouchAxes({ handbrake: val });
   }
 
   private notify(steer: number = 0, active: boolean = this.pointerId !== null): void {

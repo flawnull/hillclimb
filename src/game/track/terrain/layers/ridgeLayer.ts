@@ -57,16 +57,27 @@ export function ridgeReliefAt(x: number, z: number): number {
     // different bearing to break their flanks into spurs so the skyline is not two
     // parallel walls.
     //
-    // The wavelengths are 1400, 1450 and 1040 m, and none of them may go much lower. The
-    // far field is meshed at MAX_LEAF, which leafSizeAt reaches at 840 m out: 256 m cells,
-    // four samples or fewer per period below about 1 km. A shorter wavelength than that
-    // aliases — the crest lands wherever the grid happens to fall, shifts as the camera
-    // moves the LOD, and reads as noise rather
-    // than as a ridge. Relief detail finer than this belongs near the road, where the
-    // cells are small enough to carry it.
-    fold(x * 0.0042 + z * 0.0016) * 220 +
-    fold(z * 0.0038 - x * 0.0021 + 1.7) * 170 +
-    fold(x * 0.0045 - z * 0.004 + 2.4) * 70
+    // Wavelengths of 3100, 2200 and 1560 m, and the spread between them matters as much as
+    // the figures do.
+    //
+    // The far field is meshed at MAX_LEAF — leafSizeAt reaches it 840 m out — so a ridge is
+    // drawn in 256 m steps however finely the field is defined, and a 256 m cell 3 km away
+    // covers about 125 px. What the eye gets is the height step from one cell to the next,
+    // and that step follows the GRADIENT, so it is the ratio of amplitude to wavelength
+    // that decides whether a mountain reads as a mountain or as a handful of enormous
+    // hard-edged facets. Measured over the far field at that spacing: 82 m mean step on the
+    // old smooth relief, 159 m (worst 452) on a first attempt at these folds with
+    // wavelengths near 1400 m, which is the "gaps and missing texture between some" report.
+    // These wavelengths bring it to 114 m, worst 329.
+    //
+    // Lengthening them all uniformly is not the answer either — pushed to 3500 m the three
+    // folds land on top of the landform's own 1800-4200 m harmonics and the range collapses
+    // into one broad hump. Keeping them spread across a factor of two, with the amplitude
+    // weighted toward the longest, is what makes it read as ridges at several scales while
+    // the steepest term stays small enough not to shatter the mesh.
+    fold(x * 0.0019 + z * 0.0007) * 250 +
+    fold(z * 0.0025 - x * 0.0014 + 1.7) * 120 +
+    fold(x * 0.003 - z * 0.0027 + 2.4) * 50
   );
 }
 

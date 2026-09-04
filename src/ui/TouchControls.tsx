@@ -62,26 +62,16 @@ export const TouchControls: React.FC<TouchControlsProps> = ({ engine }) => {
     touchControllerRef.current?.handlePointerCancel(e);
   }, []);
 
-  const setThrottle = (val: number) => {
-    if (val > 0 && engine.timer.state === "ready") {
-      engine.startCountdown();
-    }
-    engine.input.setTouchAxes({ throttle: val });
-  };
-
-  const setBrake = (val: number) => {
-    if (val > 0 && engine.timer.state === "ready") {
-      engine.startCountdown();
-    }
-    engine.input.setTouchAxes({ brake: val });
-  };
-
-  const setHandbrake = (val: boolean) => {
-    if (val && engine.timer.state === "ready") {
-      engine.startCountdown();
-    }
-    engine.input.setTouchAxes({ handbrake: val });
-  };
+  // Touching any pedal before the lights is what starts the run. That is ALL these handlers
+  // do to the engine now: the axes themselves belong to TouchController, which derives all
+  // three from the set of pointers currently holding them (see syncButtonAxes). Poking
+  // `setTouchAxes` from here as well would write a value the controller did not agree to —
+  // a release setting brake to 0 while a second finger is still on the pedal, or a press
+  // setting it to 1 that no pointer is recorded as holding, which is how it came to latch
+  // on with nothing able to clear it.
+  const armCountdown = useCallback(() => {
+    if (engine.timer.state === "ready") engine.startCountdown();
+  }, [engine]);
 
   return (
     // `display: contents` (.hud-controls): this component owns the pointer
@@ -131,19 +121,17 @@ export const TouchControls: React.FC<TouchControlsProps> = ({ engine }) => {
         <button
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture?.(e.pointerId);
+            armCountdown();
             touchControllerRef.current?.pressButton(e.pointerId, "handbrake");
-            setHandbrake(true);
           }}
           onPointerUp={(e) => {
             try {
               e.currentTarget.releasePointerCapture?.(e.pointerId);
             } catch {}
             touchControllerRef.current?.releaseButton(e.pointerId);
-            setHandbrake(false);
           }}
           onPointerCancel={(e) => {
             touchControllerRef.current?.releaseButton(e.pointerId);
-            setHandbrake(false);
           }}
           className="hud-handbrake pointer-events-auto px-2.5 sm:px-4 bg-rose-950/85 active:bg-rose-600 border-2 border-rose-700/90 active:border-rose-300 rounded-2xl text-[10px] sm:text-xs font-mono font-black tracking-wider text-rose-200 active:text-white uppercase active:scale-95 transition-transform backdrop-blur-md shadow-2xl touch-none leading-none flex flex-col items-center justify-center gap-0.5"
         >
@@ -158,19 +146,17 @@ export const TouchControls: React.FC<TouchControlsProps> = ({ engine }) => {
         <button
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture?.(e.pointerId);
+            armCountdown();
             touchControllerRef.current?.pressButton(e.pointerId, "brake");
-            setBrake(1.0);
           }}
           onPointerUp={(e) => {
             try {
               e.currentTarget.releasePointerCapture?.(e.pointerId);
             } catch {}
             touchControllerRef.current?.releaseButton(e.pointerId);
-            setBrake(0.0);
           }}
           onPointerCancel={(e) => {
             touchControllerRef.current?.releaseButton(e.pointerId);
-            setBrake(0.0);
           }}
           className="hud-pedal hud-pedal-brake pointer-events-auto bg-rose-900/80 active:bg-rose-600 border-2 border-rose-600/90 active:border-rose-300 rounded-2xl flex items-center justify-center text-[11px] sm:text-sm font-mono font-black text-rose-100 active:scale-95 transition-transform backdrop-blur-md shadow-2xl touch-none"
         >
@@ -181,19 +167,17 @@ export const TouchControls: React.FC<TouchControlsProps> = ({ engine }) => {
         <button
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture?.(e.pointerId);
+            armCountdown();
             touchControllerRef.current?.pressButton(e.pointerId, "throttle");
-            setThrottle(1.0);
           }}
           onPointerUp={(e) => {
             try {
               e.currentTarget.releasePointerCapture?.(e.pointerId);
             } catch {}
             touchControllerRef.current?.releaseButton(e.pointerId);
-            setThrottle(0.0);
           }}
           onPointerCancel={(e) => {
             touchControllerRef.current?.releaseButton(e.pointerId);
-            setThrottle(0.0);
           }}
           className="hud-pedal hud-pedal-gas pointer-events-auto bg-emerald-800/90 active:bg-emerald-500 border-2 border-emerald-500 active:border-emerald-200 rounded-2xl flex items-center justify-center text-[11px] sm:text-sm font-mono font-black text-emerald-100 active:scale-95 transition-transform backdrop-blur-md shadow-2xl touch-none"
         >

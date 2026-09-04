@@ -176,6 +176,64 @@ describe("Pedals cannot stick on", () => {
     assert.strictEqual(axes.handbrake, false);
   });
 
+  it("a pointer moved from one pedal to another does not leave the first one on", () => {
+    // THE LATCHED BRAKE. Reported as the brake activating and locking forever, with the
+    // car unable to move and nothing able to release it.
+    //
+    // `pressButton` keys the held axis by pointer id, so registering a second press for an
+    // id that is already holding something REPLACES the entry. The axis it replaced used
+    // to be left switched on with nothing left in the map able to turn it off: the release
+    // that eventually arrived gave back the throttle and the brake stayed at 1 for the
+    // rest of the run. Pressing the brake again could not clear it either, because that
+    // press and its release both cancel out — which is why it was unrecoverable.
+    const { axes, c } = build();
+    c.pressButton(1, "brake");
+    assert.equal(axes.brake, 1, "brake should be on while the pointer holds it");
+    c.pressButton(1, "throttle");
+    assert.equal(axes.brake, 0, "brake must drop the moment that pointer holds something else");
+    c.releaseButton(1);
+    assert.equal(axes.brake, 0, "brake must not be latched on after the release");
+    assert.equal(axes.throttle, 0);
+  });
+
+  it("keeps a pedal on while a second finger still holds it", () => {
+    // The mirror of the case above, and the reason the axes are derived from the whole map
+    // rather than cleared by whichever release happened to arrive: two fingers on the same
+    // pedal must survive one of them lifting. Clearing the axis directly from the button's
+    // own release handler broke this.
+    const { axes, c } = build();
+    c.pressButton(1, "brake");
+    c.pressButton(2, "brake");
+    c.releaseButton(1);
+    assert.equal(axes.brake, 1, "a finger is still on the brake");
+    c.releaseButton(2);
+    assert.equal(axes.brake, 0, "and now nothing is");
+  });
+
+  it("holds every pedal a pointer is on, and only those", () => {
+    // The invariant itself, stated once: an axis is on if and only if some pointer is
+    // recorded as holding it.
+    const { axes, c } = build();
+    c.pressButton(1, "brake");
+    c.pressButton(2, "throttle");
+    c.pressButton(3, "handbrake");
+    assert.deepEqual(
+      { b: axes.brake, t: axes.throttle, h: axes.handbrake },
+      { b: 1, t: 1, h: true }
+    );
+    c.releaseButton(2);
+    assert.deepEqual(
+      { b: axes.brake, t: axes.throttle, h: axes.handbrake },
+      { b: 1, t: 0, h: true }
+    );
+    c.releaseButton(1);
+    c.releaseButton(3);
+    assert.deepEqual(
+      { b: axes.brake, t: axes.throttle, h: axes.handbrake },
+      { b: 0, t: 0, h: false }
+    );
+  });
+
   it("two fingers on two pedals release independently", () => {
     const { axes, c } = build();
     c.pressButton(3, "throttle");

@@ -59,12 +59,11 @@ function maxLegitSlopeForSample(_s: { dropDepth?: number; altitude: number }): n
 
 // ridgeReliefAt's raw analytic gradient bound, m/m: the sum of each harmonic's amplitude
 // times its wavevector magnitude. The four smooth terms contribute 1.092 as before; the
-// three ridged folds add 220*0.004494 + 170*0.004342 + 70*0.006021 = 2.148, since
+// three ridged folds add 250*0.002025 + 120*0.002865 + 50*0.004036 = 1.052, since
 // |d/du of (2/pi - |sin u|)| is 1 at every u where it is defined, exactly like a
 // sinusoid's. The bound is conservative by design — the terms cannot all peak at the
-// same point, and a 13 m sweep of 12 km square measures 2.314 against it. Must track
-// ridgeLayer.ts.
-const RIDGE_GRADIENT_BOUND = 3.25;
+// same point. Must track ridgeLayer.ts.
+const RIDGE_GRADIENT_BOUND = 2.15;
 
 // The ridgeWeightAt ramp. Must track ridgeLayer.ts.
 const RIDGE_START = 300, RIDGE_FULL = 1100;
@@ -677,8 +676,8 @@ describe("HeightField", () => {
       // simultaneously, then given the same 1.25 safety margin every other branch of this
       // test uses.
       // Peak |relief|: the smooth terms sum to 430, and the ridged folds add at most
-      // (2/pi)*(220 + 170 + 70) = 293 on a crest. Must track ridgeReliefAt.
-      const RIDGE_AMPLITUDE = 160 + 140 + 80 + 50 + Math.round((2 / Math.PI) * (220 + 170 + 70));
+      // (2/pi)*(250 + 120 + 50) = 267 on a crest. Must track ridgeReliefAt.
+      const RIDGE_AMPLITUDE = 160 + 140 + 80 + 50 + Math.round((2 / Math.PI) * (250 + 120 + 50));
       const RIDGE_BASE_FOR_TEST = 260; // must track heightField.ts's RIDGE_BASE
       const weightRampBound =
         (1.5 / (RIDGE_FULL - RIDGE_START)) * (RIDGE_BASE_FOR_TEST + RIDGE_AMPLITUDE * RIDGE_SCALE_FOR_TEST);
