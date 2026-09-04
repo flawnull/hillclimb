@@ -66,6 +66,56 @@ export interface BuildingFootprint {
 
 type Kind = "casa" | "casaLarga" | "torre" | "stalla" | "rustico" | "cappella";
 
+/**
+ * Uniform grid over a stage's road samples, so "is anything near this point" costs the
+ * handful of samples in the neighbouring cells rather than the whole stage.
+ *
+ * Placement is rejection sampling — up to twenty-six attempts per building, a dozen or so
+ * buildings per hamlet, several hamlets per stage — and each attempt was scanning every one
+ * of the 2,400 samples. Measured on Salita di Cosola that was 80 ms of the 108 ms road
+ * build, and it lands in the worst possible place: a single blocking lump right at the start
+ * of loading, before the terrain slicing that everything else was made interruptible for.
+ *
+ * Built once per stage and memoised on the sample array, since the furniture builder calls
+ * in once per hamlet with the same samples.
+ */
+const SAMPLE_GRID_M = 24;
+const gridCache = new WeakMap<object, Map<string, SplineSample[]>>();
+
+function sampleGrid(samples: SplineSample[]): Map<string, SplineSample[]> {
+  const cached = gridCache.get(samples);
+  if (cached) return cached;
+  const grid = new Map<string, SplineSample[]>();
+  for (const s of samples) {
+    const key = `${Math.floor(s.x / SAMPLE_GRID_M)},${Math.floor(s.z / SAMPLE_GRID_M)}`;
+    const cell = grid.get(key);
+    if (cell) cell.push(s);
+    else grid.set(key, [s]);
+  }
+  gridCache.set(samples, grid);
+  return grid;
+}
+
+/**
+ * Every sample in the nine cells around a point — a 24 m grid, so this covers everything
+ * within 24 m and some of what lies beyond. That is comfortably wider than any clearance
+ * this file tests (the largest is a 5.2 m footprint plus 3 m plus a 5.4 m half-width), so
+ * the answer is identical to scanning the whole stage.
+ */
+function nearbySamples(samples: SplineSample[], x: number, z: number): SplineSample[] {
+  const grid = sampleGrid(samples);
+  const cx = Math.floor(x / SAMPLE_GRID_M);
+  const cz = Math.floor(z / SAMPLE_GRID_M);
+  const out: SplineSample[] = [];
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const cell = grid.get(`${cx + dx},${cz + dz}`);
+      if (cell) out.push(...cell);
+    }
+  }
+  return out;
+}
+
 /** Wall stucco. Cream and ochre, the colours lime render goes in this valley. */
 const WALL_COLORS = ["#e6dac6", "#dcc19b", "#c9a184", "#efe0c4", "#d3b48f", "#c8b79b"];
 /** Slate first: at 700-900 m it is the more common roof, and its grey is what stops a
@@ -321,7 +371,7 @@ export function buildHamlet(
    */
   const clearanceToRoad = (x: number, z: number): number => {
     let best = Infinity;
-    for (const smp of allSamples) {
+    for (const smp of nearbySamples(allSamples, x, z)) {
       const d = Math.hypot(smp.x - x, smp.z - z) - smp.halfWidth;
       if (d < best) best = d;
     }

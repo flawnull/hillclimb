@@ -241,13 +241,25 @@ export class GameRenderer {
     yieldTo: () => Promise<void>,
     onProgress?: (fraction: number) => void
   ): Promise<void> {
+    // The road, its props and the hamlets are ~50 ms on Borbera Sprint and ~95 ms on Salita
+    // di Cosola, and they run BEFORE the terrain — so without a yield around them the very
+    // first thing the loading screen does is freeze, with the bar still at zero. Measured on
+    // the live site in Chromium, every frame over 60 ms fell in that window. It is one
+    // uninterruptible call and cannot be sliced from here, but it can be given a painted
+    // frame either side of it, and the bar can say something other than nothing.
+    onProgress?.(0.01);
+    await yieldTo();
     const prepared = this.prepareTrack(spline);
+    onProgress?.(0.04);
+    await yieldTo();
+
     this.terrain = await TerrainSystem.createAsync(
       spline,
       prepared.field,
       prepared.buildings,
       yieldTo,
-      onProgress
+      // The terrain is the remaining 95% — it is 30 times the work of everything above.
+      onProgress ? (f) => onProgress(0.04 + f * 0.96) : undefined
     );
     this.attachTerrain();
   }

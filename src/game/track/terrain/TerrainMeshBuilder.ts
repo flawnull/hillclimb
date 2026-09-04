@@ -631,12 +631,20 @@ export async function buildChunkedTerrainAsync(
   for (;;) {
     const until = performance.now() + BUDGET_MS;
     let more = true;
-    // `performance.now()` is checked every 64 cells rather than every one: a cell is
-    // microseconds, and reading the clock that often would cost more than the work.
-    let n = 0;
+    // The clock is checked EVERY cell.
+    //
+    // It was checked every 64 on the reasoning that a cell is microseconds and reading the
+    // clock that often would cost more than the work. That is true of an interior cell and
+    // false of a leaf, which samples the height field at four corners at 143-333 us each —
+    // one to three milliseconds. Sixty-four of those overshoots a 6 ms budget by more than
+    // 100 ms, and that is exactly what the live site showed: a run of a dozen frames of
+    // 100-130 ms while the bar still read 3%, which was the remaining jitter.
+    //
+    // `performance.now()` is about 50 ns. Across the whole build that is under a millisecond
+    // — cheaper than a single one of the frames it was costing.
     while (more) {
       more = build.step();
-      if ((++n & 63) === 0 && performance.now() >= until) break;
+      if (performance.now() >= until) break;
     }
     if (!more) break;
     onProgress?.(build.progress());
