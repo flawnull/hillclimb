@@ -479,3 +479,89 @@ body {
   -webkit-backdrop-filter: blur(24px);
   backdrop-filter: blur(24px);
 }
+
+
+/* ── Phone portrait, while driving ────────────────────────────────────────
+ * Measured on a 390x844 viewport with the game running: the top chrome occupied
+ * 161 px before the view began (a timer row, then a stage banner beside four
+ * action buttons), the altimeter's profile strip covered a further 89x328 px of
+ * the right-hand side, and the canvas was left with 337 px — 40% of the screen —
+ * for the thing the player is actually looking at.
+ *
+ * Almost none of that chrome is wanted mid-run. Which stage you are on is not a
+ * question you have while driving it, and the four buttons are between-runs
+ * concerns. The timer is the exception: it is the whole point of a time attack.
+ * So while running, the banner goes, the buttons shrink, and the two rows become
+ * one — which hands about 105 px back to the road, a third more view.
+ */
+@media (orientation: portrait) and (max-width: 700px) {
+  .hud-running .hud-topleft {
+    display: none;
+  }
+
+  .hud-running .hud-grid {
+    grid-template-areas:
+      "timer    timer     topright"
+      "hint     hint      hint"
+      "midleft  .         midright"
+      "speedo   speedo    speedo"
+      "botleft  botcenter botright";
+    grid-template-rows:
+      auto auto
+      minmax(0, 1fr)
+      var(--speedo-h)
+      calc(var(--dock-h) - var(--speedo-h));
+  }
+
+  /* Smaller targets, but still comfortably over the 44 px touch minimum once the
+   * button's own padding is counted. */
+  /* Four buttons do not fit the remaining column at 390 px — measured, they wrapped
+   * onto a second row and put the chrome back to 112 px, undoing the whole point of
+   * this layout. The tuning panel is a between-runs affordance and is the one to
+   * lose; reset, mute and leaderboard stay. Their 44 px touch targets are NOT reduced:
+   * that minimum is there for a reason and shrinking it to win 12 px would be the
+   * wrong trade. */
+  .hud-running .hud-btn-tuning {
+    display: none;
+  }
+
+  .hud-running .hud-topright svg {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  /* The altimeter's profile strip is a 12 px-wide sliver 328 px tall laid over the
+   * right of the view. The altitude, the climb and the drop warning are all on the
+   * card beside it, which is the part that carries information at this size; the
+   * strip is decoration that costs a quarter of the screen's width. */
+  .hud-running .hud-altimeter-strip {
+    display: none;
+  }
+}
+
+/* The steering pad is the primary control and had a 153 px column while the dock's
+ * middle sat empty. Widen it — a bigger surface for a relative-anchor drag is
+ * straightforwardly better, and the space was doing nothing.
+ *
+ * The handbrake moves out of its way rather than the pad stopping short of it. It
+ * was centred on the viewport, which put it 91 px INSIDE the widened pad; pushed to
+ * the end of its column it sits just left of the pedals, which is where a right
+ * thumb already is. */
+@media (orientation: portrait) and (max-width: 700px) {
+  /* STRETCH the pad to the column it already has, rather than resizing tracks.
+   *
+   * Two wrong turns before this one, both measured: a `min-width` on the pad made it
+   * overflow its 1fr track and sit 91 px on top of the handbrake, because an `auto`
+   * track is sized from its content and knows nothing about an overflowing neighbour.
+   * Reserving the width on the TRACK instead fixed the overlap but starved the
+   * top-right column, so the three action buttons wrapped onto a second row and the
+   * chrome went straight back to 112 px.
+   *
+   * The first column is already ~195 px at this width; the pad was simply sized to its
+   * content and leaving most of it empty. Filling the cell needs no track changes at
+   * all, so nothing else on either row moves. */
+  .hud-steer {
+    justify-self: stretch;
+    width: 100%;
+  }
+}

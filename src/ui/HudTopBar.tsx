@@ -139,10 +139,12 @@ export function HudTopBar({
           <span className="hidden lg:inline">LEADERBOARD</span>
         </button>
 
-        {/* Tuning / Settings Button */}
+        {/* Tuning / Settings Button. Carries `hud-btn-tuning` so the phone layout can drop
+            it mid-run — see globals.css. It is a between-runs affordance, and on a 390 px
+            portrait it is the button that pushes the cluster onto a second row. */}
         <button
           onClick={onToggleTuningPanel}
-          className={`hud-btn flex items-center justify-center p-2 bg-slate-950/85 backdrop-blur-md border rounded-xl transition shadow-lg active:scale-95 ${
+          className={`hud-btn hud-btn-tuning flex items-center justify-center p-2 bg-slate-950/85 backdrop-blur-md border rounded-xl transition shadow-lg active:scale-95 ${
             showTuningPanel
               ? "border-amber-500 text-amber-400"
               : "border-slate-800/90 text-slate-400 hover:text-white hover:border-slate-600"

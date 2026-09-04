@@ -161,7 +161,7 @@ export default function HomePage() {
   };
 
   return (
-    <main className={`hud-root w-screen h-screen bg-slate-950 text-white font-sans select-none${sceneReady && !building ? "" : " hud-loading"}`}>
+    <main className={`hud-root w-screen h-screen bg-slate-950 text-white font-sans select-none${sceneReady && !building ? "" : " hud-loading"}${hudState.runState === "running" ? " hud-running" : ""}`}>
       {/* 3D Canvas. Full-bleed in landscape; the top 62% in portrait (§9.1) —
           see .hud-stage in app/globals.css. */}
       <div className="hud-stage">
