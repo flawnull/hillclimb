@@ -81,7 +81,13 @@ const SLOPE_STEP = 4;
 export const FIELD_PADDING = 2500;
 
 /** Mean ridge amplitude added on top of the base altitude in the far field, metres. */
-const RIDGE_BASE = 190;
+// 260 m, not 190. With the ridged folds alone the far field topped out at 1112 m, low
+// enough that the peaks stayed green whatever the colour band did: bare
+// rock does not start until well above that on hills of this size, so the massif has to
+// stand higher before any colour rule can honestly call it rock. The ramp is spread over
+// 800 m rather than 620 (ridgeLayer.ts) to absorb the extra height, so the slope out of
+// the valley is unchanged and this does not become a crater rim around the road.
+const RIDGE_BASE = 260;
 const RIDGE_SCALE = 0.65;
 
 export interface TerrainColor {
@@ -194,11 +200,29 @@ export function createHeightField(spline: TrackSpline): HeightField {
     // altitude (not the road's), so distant peaks and valleys read by what they actually
     // are, not by proximity to a road sample.
     const altT1 = smoothstep(600, 1000, y);
-    const altT2 = smoothstep(1000, 1450, y);
+    // The bare-rock band. Two things decide it, and it needs both.
+    //
+    // ALTITUDE, 720-1000 m. The old 1000-1450 was aspirational: measured over the actual
+    // terrain mesh, the skyline tops out at 1099 m on Borbera and 1143 m on Salita, so the
+    // band's upper half was dead and its lower half caught a handful of summit vertices —
+    // which is why the peaks stayed green however the relief was shaped.
+    //
+    // DISTANCE TO THE ROUTE, 500-1000 m. Lowering the altitude band far enough to actually
+    // colour the skyline brings it to within 85 m of the top of Salita's road, which would
+    // start turning the ground beside the driver grey on a 735 m pass — where in reality
+    // there is forest and pasture, not rock. The gate confines the band to the far field,
+    // which is precisely what it is for: the bare tops are what you see across the valley,
+    // not what you drive past. It is a function of the point's own distance to the route,
+    // so a given patch of ground keeps one colour however the car moves.
+    const altT2 = smoothstep(720, 1000, y) * smoothstep(500, 1000, near.dist);
 
     const lowR = 0.26, lowG = 0.42, lowB = 0.18;
     const midR = 0.36, midG = 0.47, midB = 0.24;
-    const highR = 0.54, highG = 0.54, highB = 0.42;
+    // High ground is ROCK, not pale grass. The old tone was a khaki that read as dry
+    // pasture, which was harmless while nothing ever reached the altitude it applied at —
+    // the far field topped out around 1030 m against a band that started at 1000. It is
+    // now the colour of the skyline itself, so it is the grey of Apennine limestone.
+    const highR = 0.53, highG = 0.52, highB = 0.50;
 
     let r = lerp(lowR, midR, altT1);
     let g = lerp(lowG, midG, altT1);

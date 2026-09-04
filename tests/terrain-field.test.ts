@@ -57,6 +57,18 @@ function maxLegitSlopeForSample(_s: { dropDepth?: number; altitude: number }): n
   return Math.max(DROP_SLOPE, CUT_MAX_SLOPE);
 }
 
+// ridgeReliefAt's raw analytic gradient bound, m/m: the sum of each harmonic's amplitude
+// times its wavevector magnitude. The four smooth terms contribute 1.092 as before; the
+// three ridged folds add 220*0.004494 + 170*0.004342 + 70*0.006021 = 2.148, since
+// |d/du of (2/pi - |sin u|)| is 1 at every u where it is defined, exactly like a
+// sinusoid's. The bound is conservative by design — the terms cannot all peak at the
+// same point, and a 13 m sweep of 12 km square measures 2.314 against it. Must track
+// ridgeLayer.ts.
+const RIDGE_GRADIENT_BOUND = 3.25;
+
+// The ridgeWeightAt ramp. Must track ridgeLayer.ts.
+const RIDGE_START = 300, RIDGE_FULL = 1100;
+
 describe("RoadIndex", () => {
   it("returns exactly the samples a brute-force scan would return", () => {
     const spline = new TrackSpline(getStageDef("salita-cosola"));
@@ -348,22 +360,39 @@ describe("valleyLayer", () => {
 describe("ridgeLayer", () => {
   it("weights ridges out entirely near the road and fully in the far field", () => {
     assert.equal(ridgeWeightAt(0), 0);
-    assert.equal(ridgeWeightAt(179), 0);
-    assert.equal(ridgeWeightAt(800), 1);
+    assert.equal(ridgeWeightAt(RIDGE_START - 1), 0);
+    assert.equal(ridgeWeightAt(RIDGE_FULL), 1);
     assert.equal(ridgeWeightAt(5000), 1);
-    assert.ok(ridgeWeightAt(490) > 0.4 && ridgeWeightAt(490) < 0.6);
+    // Half weight at the midpoint of the ramp, wherever the ramp currently sits — the
+    // hardcoded 490 here was the midpoint of the old 180-800 band and had to be re-guessed
+    // the moment the band moved.
+    const mid = (RIDGE_START + RIDGE_FULL) / 2;
+    assert.ok(ridgeWeightAt(mid) > 0.45 && ridgeWeightAt(mid) < 0.55, `weight at midpoint ${mid}`);
   });
 
   it("has a zero derivative at both ends of the blend, so ridges never crease in", () => {
-    assert.ok(Math.abs(ridgeWeightAt(181) - ridgeWeightAt(180)) < 1e-3);
-    assert.ok(Math.abs(ridgeWeightAt(799) - ridgeWeightAt(800)) < 1e-3);
+    assert.ok(Math.abs(ridgeWeightAt(301) - ridgeWeightAt(300)) < 1e-3);
+    assert.ok(Math.abs(ridgeWeightAt(RIDGE_FULL - 1) - ridgeWeightAt(RIDGE_FULL)) < 1e-3);
   });
 
   it("is continuous in world space", () => {
-    let prev = ridgeReliefAt(0, 0);
+    // Seeded at (0, 137), not (0, 0): the sweep runs along z = 137, so seeding at the
+    // origin made the FIRST comparison span 137 m of z rather than 1 m of x. It passed on
+    // the old amplitudes by luck (that gap measured 0.44 against a threshold of 2.0) and
+    // failed the moment the amplitudes rose, reporting a discontinuity in a function that
+    // is continuous everywhere.
+    //
+    // The threshold is the gradient bound rather than a hardcoded figure, so it tracks the
+    // harmonics instead of having to be re-guessed each time one changes. The folds are
+    // continuous but NOT differentiable at their crests, which is the whole point of them;
+    // continuity is what this test is for, and a crease of bounded slope satisfies it.
+    let prev = ridgeReliefAt(0, 137);
     for (let x = 1; x <= 4000; x += 1) {
       const h = ridgeReliefAt(x, 137);
-      assert.ok(Math.abs(h - prev) < 2.0, `relief jumped ${Math.abs(h - prev)} at x=${x}`);
+      assert.ok(
+        Math.abs(h - prev) <= RIDGE_GRADIENT_BOUND,
+        `relief jumped ${Math.abs(h - prev)} over 1 m at x=${x}`
+      );
       prev = h;
     }
   });
@@ -533,7 +562,6 @@ describe("HeightField", () => {
   // "is continuous across the medial axis" test's toleranceFor), or from the ridge layer's
   // own analytic gradient bound (far field, where no road tier is within CARVE_RADIUS of
   // any of the probed points).
-  const RIDGE_GRADIENT_BOUND = 1.092; // ridgeReliefAt's raw analytic gradient bound, m/m
   // Must track heightField.ts's RIDGE_SCALE, duplicated here for the same reason
   // DROP_FALLOFF is duplicated above: this file must not import implementation constants
   // that heightField.ts does not export.
@@ -623,7 +651,7 @@ describe("HeightField", () => {
       // Lipschitz failure with numbers): amendment D's literal far-field tolerance —
       // "1.092 m/m raw, times RIDGE_SCALE", i.e. RIDGE_GRADIENT_BOUND * RIDGE_SCALE_FOR_TEST
       // alone — FAILED at borbera-sprint s=330.04 lat=600 (distToRoute ~590 m, inside the
-      // ridgeWeightAt ramp, 180-800 m): measured step 0.7137 m/m against that tolerance of
+      // ridgeWeightAt ramp, RIDGE_START-RIDGE_FULL): measured step 0.7137 m/m against that tolerance of
       // 0.7098 m/m. Decomposed directly (not a wedge/cliff — genuinely gentle terrain):
       //   weight-ramp term  (ridgeWeightAt(d1)-ridgeWeightAt(d0)) * (RIDGE_BASE + relief*RIDGE_SCALE)  = -0.5354
       //   relief term       ridgeWeightAt(d) * RIDGE_SCALE * (relief1 - relief0)                        = -0.1696
@@ -633,7 +661,7 @@ describe("HeightField", () => {
       // derivative, multiplied by (RIDGE_BASE + relief*RIDGE_SCALE) which can be as large as
       // ~470 m, was entirely omitted from amendment D's stated bound. That bound only covers
       // the relief-gradient term (RIDGE_SCALE * RIDGE_GRADIENT_BOUND); it implicitly assumed
-      // "far field" meant the weight had already saturated (d >= RIDGE_FULL = 800, where
+      // "far field" meant the weight had already saturated (d >= RIDGE_FULL, where
       // ridgeWeightAt's derivative is 0), but "no hits" (this branch) starts at
       // CARVE_RADIUS = 90 m, deep inside the 180-800 m ramp where the weight is still
       // changing. This is not a code defect — it's real terrain, a smooth blend of a ~190 m
@@ -648,9 +676,10 @@ describe("HeightField", () => {
       // Summed (not maxed) because all three terms can act in the same direction
       // simultaneously, then given the same 1.25 safety margin every other branch of this
       // test uses.
-      const RIDGE_FULL = 800, RIDGE_START = 180; // must track ridgeLayer.ts
-      const RIDGE_AMPLITUDE = 160 + 140 + 80 + 50; // must track ridgeReliefAt's harmonic amplitudes
-      const RIDGE_BASE_FOR_TEST = 190; // must track heightField.ts's RIDGE_BASE
+      // Peak |relief|: the smooth terms sum to 430, and the ridged folds add at most
+      // (2/pi)*(220 + 170 + 70) = 293 on a crest. Must track ridgeReliefAt.
+      const RIDGE_AMPLITUDE = 160 + 140 + 80 + 50 + Math.round((2 / Math.PI) * (220 + 170 + 70));
+      const RIDGE_BASE_FOR_TEST = 260; // must track heightField.ts's RIDGE_BASE
       const weightRampBound =
         (1.5 / (RIDGE_FULL - RIDGE_START)) * (RIDGE_BASE_FOR_TEST + RIDGE_AMPLITUDE * RIDGE_SCALE_FOR_TEST);
       const reliefRampBound = RIDGE_SCALE_FOR_TEST * RIDGE_GRADIENT_BOUND;
