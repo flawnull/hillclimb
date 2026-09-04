@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { SplineSample } from "./TrackSpline";
 import { buildHamlet, BuildingFootprint } from "./HamletBuilder";
+import { buildPastures } from "./PastureBuilder";
 
 function detNormalizeAngle(a: number): number {
   let res = a;
@@ -111,6 +112,10 @@ export function buildRoadsideFurniture(
     lastHamletS = s.s;
     buildings.push(...buildHamlet(s, samples, landmarkGroup, groundAt));
   }
+
+  // Farms and grazing cattle fill the middle distance between the hamlets. Placed after
+  // them so they can keep clear of what is already standing.
+  buildings.push(...buildPastures(samples, landmarkGroup, groundAt, buildings));
 
   const POST_RADIAL_SEGMENTS = 6;
   const POLE_RADIAL_SEGMENTS = 8;
