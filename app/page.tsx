@@ -70,6 +70,19 @@ export default function HomePage() {
   const [slowLoad, setSlowLoad] = useState<boolean>(false);
   /** 0..1 across the stage build, reported by the renderer while it slices the terrain. */
   const [buildProgress, setBuildProgress] = useState<number>(0);
+  /**
+   * Progress is reported once per built chunk — over a thousand times across a stage — and
+   * every one of those used to be a React state update, re-rendering this whole component
+   * and its HUD while the browser was already busy generating terrain. The bar only shows
+   * whole percentages, so anything finer than that is work with no pixel to show for it.
+   */
+  const lastPercentRef = useRef(-1);
+  const reportProgress = useCallback((fraction: number) => {
+    const pct = Math.round(fraction * 100);
+    if (pct === lastPercentRef.current) return;
+    lastPercentRef.current = pct;
+    setBuildProgress(fraction);
+  }, []);
   /** True while a stage is generating, including a switch after the first load. */
   const [building, setBuilding] = useState<boolean>(true);
 
@@ -173,7 +186,7 @@ export default function HomePage() {
           spline={spline}
           qualityTier={settings.qualityTier}
           onStateUpdate={handleStateUpdate}
-          onBuildProgress={setBuildProgress}
+          onBuildProgress={reportProgress}
           onBuildingChange={setBuilding}
         />
 
@@ -297,7 +310,12 @@ export default function HomePage() {
               the difference between "working" and "hung" is the whole question. */}
           <div className="vb-track mt-6 w-56 sm:w-72 h-3 rounded-full overflow-hidden border border-slate-700/70">
             <div
-              className="vb-fill h-full rounded-full transition-[width] duration-200 ease-linear"
+              /* No width TRANSITION. `width` is a layout property, so animating it puts a
+                 relayout and repaint on the main thread every frame — the one thread this
+                 screen exists to keep free. The bar steps about twenty-five times over a
+                 load, which reads as progress; the smooth motion is the sheen, which is a
+                 transform and runs on the compositor. */
+              className="vb-fill h-full rounded-full"
               style={{ width: `${Math.max(3, Math.round(buildProgress * 100))}%` }}
             />
           </div>

@@ -381,6 +381,7 @@ body {
 
 .vb-fill::after {
   content: "";
+  will-change: transform;
   position: absolute;
   inset: 0;
   width: 45%;

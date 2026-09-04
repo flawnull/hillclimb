@@ -21,6 +21,35 @@ interface GameCanvasProps {
   onBuildingChange?: (building: boolean) => void;
 }
 
+/**
+ * Hands control back to the browser between chunks of terrain generation.
+ *
+ * The primitive matters more than anything else about the pacing, and the two obvious
+ * choices are both wrong:
+ *
+ *   requestAnimationFrame — measured HALF the frame rate (17.5 fps against 35.3). A chunk
+ *   that overruns the frame it started in makes the yield wait for the next vsync, so
+ *   every overrun costs a whole frame rather than a few milliseconds.
+ *
+ *   MessageChannel — the classic unclamped macrotask, and what React's scheduler uses for
+ *   its own work loop. Measured here it STARVES rendering: 5.2 fps, with frames as long as
+ *   a second, because the continuation is queued so eagerly that the browser never reaches
+ *   a paint. It is the right primitive for work that must not be starved, and the wrong one
+ *   for work whose entire purpose is to leave room for painting.
+ *
+ * `setTimeout(0)` is the one that leaves the browser room. It is clamped to roughly 4 ms
+ * once nesting passes five levels, which is real overhead, but that overhead IS the gap the
+ * paint happens in. `scheduler.yield()` is the standardised primitive for exactly this and
+ * is preferred where it exists.
+ */
+function makeYield(): () => Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof scheduler?.yield === "function") {
+    return () => scheduler.yield!();
+  }
+  return () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+}
+
 export const GameCanvas: React.FC<GameCanvasProps> = ({
   engine,
   car,
@@ -67,11 +96,8 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     // painted, so no animation on it could ever run. It is now built a slice at a time with
     // a macrotask between slices, which lets the page paint and report real progress.
     //
-    // `setTimeout(0)` rather than rAF: a rAF callback runs BEFORE paint, so yielding to one
-    // hands control back without the frame having been drawn. A macrotask lets the frame
-    // complete first, which is the point.
     let cancelled = false;
-    const yieldTo = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    const yieldTo = makeYield();
 
     void (async () => {
       if (spline && !renderer.hasTrack()) {
@@ -112,7 +138,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     }
     if (builtSplineRef.current === spline) return;
     builtSplineRef.current = spline;
-    const yieldTo = () => new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    const yieldTo = makeYield();
     // The veil comes back for a stage switch too. `prepareTrack` clears the old terrain
     // before the new one starts generating, so without this the player watches a road and
     // a row of houses hanging in an empty sky for the several seconds the build takes.
