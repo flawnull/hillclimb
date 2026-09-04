@@ -12,6 +12,7 @@ import { TerrainSystem } from "../track/terrain/TerrainSystem";
 import { createHeightField, type HeightField } from "../track/terrain/heightField";
 import type { BuildingFootprint } from "../track/HamletBuilder";
 import { QualityTier } from "@/store/gameStore";
+import { pixelRatioFor, shouldAntialias } from "./pixelBudget";
 import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
 import { EffectsManager } from "./EffectsManager";
@@ -89,6 +90,7 @@ export class GameRenderer {
   private lowFpsTimer = 0;
   private highFpsTimer = 0;
   private currentDprScale = 1.0;
+  private qualityTier: QualityTier = "high";
 
   // Latched light states, so the render loop only writes materials on an actual change.
   private lastBrakingState: boolean | null = null;
@@ -114,17 +116,38 @@ export class GameRenderer {
     this.activeColorIndex = colorIndex;
     this.activeSpline = spline;
 
-    // 1. Initialize WebGL Renderer
+    // 1. Initialize WebGL Renderer.
+    //
+    // The pixel ratio is budgeted by AREA, not taken from the display — see pixelBudget.ts.
+    // `min(devicePixelRatio, 2)` is the conventional choice and it is why this ran worse on a
+    // desktop than on a phone: the same ratio over a 2560x1440 window is 14.7 M device pixels
+    // against a phone's 1.3 M, and every one of them is shaded by the same terrain, fog and
+    // shadow work.
+    const initialRatio = pixelRatioFor(
+      canvas.clientWidth,
+      canvas.clientHeight,
+      window.devicePixelRatio || 1,
+      "high"
+    );
+
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      // Multisampling is decided once, at context creation, so it is decided against the
+      // ratio this canvas starts at. A buffer already supersampled 1.5x or more is paying
+      // twice for the same edges.
+      antialias: shouldAntialias(initialRatio),
       powerPreference: "high-performance",
       alpha: false,
     });
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(initialRatio);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // PCFSoft filters the shadow map per fragment and is the most expensive of the three.
+    // At a supersampled ratio the extra softness is being resolved away anyway, so the plain
+    // PCF filter buys back fragment work that the resolution is already spending.
+    this.renderer.shadowMap.type = shouldAntialias(initialRatio)
+      ? THREE.PCFSoftShadowMap
+      : THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
@@ -380,12 +403,24 @@ export class GameRenderer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    // The budget is an area, so resizing the window changes the ratio it allows.
+    this.renderer.setPixelRatio(this.targetPixelRatio() * this.currentDprScale);
   };
 
   public setQualityTier(tier: QualityTier): void {
-    const dpr = tier === "high" ? Math.min(window.devicePixelRatio || 1, 2) : tier === "medium" ? 1.25 : 1.0;
-    this.renderer.setPixelRatio(dpr);
+    this.qualityTier = tier;
+    this.renderer.setPixelRatio(this.targetPixelRatio() * this.currentDprScale);
     this.renderer.shadowMap.enabled = tier !== "low";
+  }
+
+  /** The unscaled ratio for the current tier and canvas size. */
+  private targetPixelRatio(): number {
+    return pixelRatioFor(
+      this.canvas.clientWidth,
+      this.canvas.clientHeight,
+      window.devicePixelRatio || 1,
+      this.qualityTier
+    );
   }
 
   public setCar(car: CarDef, colorIndex: number = 0): void {
@@ -550,11 +585,15 @@ export class GameRenderer {
       // recovers risks immediately re-triggering the downscale and oscillating between
       // the two. Being reluctant to scale up avoids that thrash.
       const currentFps = 1.0 / (deltaSeconds || 0.016);
-      const baseDpr = Math.min(window.devicePixelRatio || 1, 2);
+      const baseDpr = this.targetPixelRatio();
       if (currentFps < 54 && this.currentDprScale > 0.6) {
         this.lowFpsTimer += deltaSeconds;
         this.highFpsTimer = 0;
-        if (this.lowFpsTimer > 2.5) {
+        // 2.5 s was too patient: two and a half seconds of dropped frames is most of a
+        // corner, and the player feels all of it before anything is done. Scaling UP stays
+        // reluctant at 10 s, because raising resolution is what caused the stall in the
+        // first place and oscillating between the two is worse than either.
+        if (this.lowFpsTimer > 1.2) {
           this.currentDprScale = Math.max(0.6, this.currentDprScale - 0.15);
           this.renderer.setPixelRatio(baseDpr * this.currentDprScale);
           this.lowFpsTimer = 0;
