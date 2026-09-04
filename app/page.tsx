@@ -386,7 +386,14 @@ export default function HomePage() {
       {showLeaderboardModal && (
         <LeaderboardModal
           initialStageId={selectedStageId}
-          onClose={() => setShowLeaderboardModal(false)}
+          onClose={() => {
+            setShowLeaderboardModal(false);
+            // Came here from the result screen? Go back to it. Otherwise closing the board
+            // after submitting a time dropped the player into the world with the run over,
+            // no modal and nothing telling them what to do next — the car sitting past the
+            // finish line and the only way on being to find the reset button in the top bar.
+            if (finishResult) setShowResultModal(true);
+          }}
         />
       )}
 

@@ -76,6 +76,17 @@ export class Engine {
   private currentHairpin: number = 0;
   private hairpinSValues: number[] = [];
   private respawnCount: number = 0;
+  /** The last ground the car was on, so the post-finish coast-down has a surface. */
+  private lastGround: GroundQuery = {
+    groundY: 0,
+    roadPitch: 0,
+    roadBank: 0,
+    surface: 'asphalt',
+    onRoad: true,
+    baseAltitude: 560,
+  };
+  /** Mirrors VehicleModel's own previous position, for the settle check above. */
+  private prevPos: { x: number; z: number } = { x: 0, z: 0 };
   private onFinishCallback?: (totalTimeSec: number, splits: SplitRecord[]) => void;
 
   private renderState: EngineRenderState = {
@@ -280,6 +291,41 @@ export class Engine {
       return;
     }
 
+    // AFTER THE FINISH the car rolls to a halt rather than being abandoned mid-stride.
+    //
+    // Physics used to stop dead here, and that is what produced the car twitching on the
+    // spot past the line: `prevPos` stays one step behind `pos` forever while the render
+    // accumulator keeps cycling alpha from 0 to 1 every frame, so `getInterpolatedState`
+    // slides back and forth over the last 0.6 m at frame rate. The speedometer was frozen
+    // at whatever it read as the line went by — 133 km/h on a stationary car.
+    //
+    // Coasting to a stop fixes the readouts as a side effect and is what actually happens
+    // at the end of a run. It cannot affect the leaderboard: the replay recorder stops at
+    // the finish frame, and the server re-simulation in validate.ts drives VehicleModel and
+    // Timer directly and never runs this file at all.
+    if (this.timer.state === 'finished') {
+      const s = this.vehicle.state;
+      if (s.speedMs > 0.15) {
+        this.vehicle.step(
+          dt,
+          { steer: 0, throttle: 0, brake: 0.45, handbrake: false, reverse: false },
+          this.lastGround,
+          false
+        );
+      } else if (this.prevPos.x !== s.pos.x || this.prevPos.z !== s.pos.z) {
+        this.prevPos = { x: s.pos.x, z: s.pos.z };
+        // Stopped. One more step with everything off settles `prevPos` onto `pos`, so the
+        // interpolation has nothing left to slide between.
+        this.vehicle.step(
+          dt,
+          { steer: 0, throttle: 0, brake: 1, handbrake: true, reverse: false },
+          this.lastGround,
+          false
+        );
+      }
+      return;
+    }
+
     if (this.timer.state !== 'running') {
       return;
     }
@@ -319,7 +365,7 @@ export class Engine {
         surface = Math.abs(t) <= hw + 0.85 ? 'gravel' : 'grass';
       }
 
-      ground = {
+      this.lastGround = {
         groundY: proj.sample.y,
         roadPitch: proj.sample.pitch,
         roadBank: proj.sample.bank,
@@ -328,6 +374,7 @@ export class Engine {
         onRoad,
         baseAltitude: proj.sample.altitude,
       };
+      ground = this.lastGround;
 
       // Frenet Boundary Collision & Penalties (§6.6)
       const isLeft = t < 0;

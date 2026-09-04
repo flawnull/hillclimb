@@ -301,16 +301,20 @@ export const ResultModal: React.FC<ResultModalProps> = ({
 
         {/* Actions */}
         <div className="grid grid-cols-2 gap-2.5">
+          {/* Retry is the primary action, not "stages". Having just driven this climb, the
+              thing almost everyone wants next is to drive it again — and it is also what
+              puts the car back on the start line, which is otherwise a hunt for the reset
+              button in the top bar. */}
           <button
             onClick={onRestart}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition active:scale-95"
+            className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition shadow-lg shadow-amber-500/30 active:scale-95"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            RETRY (R)
+            RACE AGAIN (R)
           </button>
           <button
             onClick={onSelectStage}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition shadow-lg shadow-amber-500/30 active:scale-95"
+            className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition active:scale-95"
           >
             STAGES
             <ArrowRight className="w-3.5 h-3.5" />

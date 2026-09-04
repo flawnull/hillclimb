@@ -282,9 +282,31 @@ export class GameRenderer {
       prepared.buildings,
       yieldTo,
       // The terrain is the remaining 95% — it is 30 times the work of everything above.
-      onProgress ? (f) => onProgress(0.04 + f * 0.96) : undefined
+      onProgress ? (f) => onProgress(0.04 + f * 0.94) : undefined
     );
     this.attachTerrain();
+
+    // COMPILE THE SHADERS NOW, not on first sight.
+    //
+    // WebGL compiles a program the first time a material is drawn with a given light setup,
+    // and that compile blocks. Everything in this scene is therefore paid for at the moment
+    // it first enters the frustum — which is the first few seconds of driving, one stall per
+    // material as the car reaches it. That is the stutter at the start of a run: not loading,
+    // but the last of the loading arriving late.
+    //
+    // `compileAsync` walks the whole scene and does it up front, where there is already a
+    // loading screen to do it behind. It yields internally, so the bar keeps moving.
+    const renderer = this.renderer as THREE.WebGLRenderer & {
+      compileAsync?: (scene: THREE.Object3D, camera: THREE.Camera) => Promise<unknown>;
+    };
+    onProgress?.(0.98);
+    if (typeof renderer.compileAsync === "function") {
+      await renderer.compileAsync(this.scene, this.camera);
+    } else {
+      await yieldTo();
+      this.renderer.compile(this.scene, this.camera);
+    }
+    onProgress?.(1);
   }
 
   /** True once a track has been built into the scene. */
