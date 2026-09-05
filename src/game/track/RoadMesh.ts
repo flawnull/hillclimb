@@ -252,6 +252,24 @@ export class RoadMesh {
       map: this.roadTexture,
       roughness: 0.82,
       metalness: 0.08,
+      // THE DECK IS A SINGLE SHEET, SO IT MUST BE DRAWN FROM BOTH SIDES.
+      //
+      // The ribbon above is one surface seven vertices wide with no thickness and no
+      // underside — there is no soffit, only a top face wound to face up. At three.js's
+      // default `FrontSide` that face is culled the moment it is seen from below, and since
+      // nothing else occupies that space the sky shows through: looking up at a switchback
+      // above you gave guardrails and kerb markers hanging in mid-air over an empty gap
+      // where the carriageway should be. Measured before this change by raycasting the deck
+      // from both directions on both stages: visible from above at 120/120 and 98/98 probe
+      // points, from below at 0.
+      //
+      // `DoubleSide` rather than an extruded soffit deliberately. A modelled underside would
+      // roughly double the ribbon, and the ribbon is the largest single mesh in the stage —
+      // both stages currently sit within about 6,000 triangles of their scene-budget
+      // ceilings, so there is no room for it and the road is nowhere thick enough for the
+      // edge to read as anything but a line anyway. three.js flips the normal for back faces
+      // in the shader, so the underside lights correctly rather than as a black sheet.
+      side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -2.0,
       polygonOffsetUnits: -4.0,

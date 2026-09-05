@@ -24,6 +24,7 @@ import * as THREE from "three";
 
 import { getStageDef, STAGE_LIST } from "../src/game/track/stages";
 import { TrackSpline } from "../src/game/track/TrackSpline";
+import { RoadMesh } from "../src/game/track/RoadMesh";
 import { createHeightField } from "../src/game/track/terrain/heightField";
 import { TerrainSystem } from "../src/game/track/terrain/TerrainSystem";
 
@@ -143,6 +144,41 @@ describe("The road stands on the ground", () => {
         0,
         `${stageId}: ${unsupported} of ${airborne.length} airborne verge nodes have no embankment, ` +
           `deck fascia or pier beneath them (worst: ${worst?.gap.toFixed(1)} m above the ground)`
+      );
+    });
+
+    it(`${stageId}: the carriageway is solid when seen from underneath`, () => {
+      // The deck is one sheet with a top face and no soffit, so whether it exists at all
+      // from below is decided entirely by `material.side` (see RoadMesh's material). At the
+      // three.js default of `FrontSide` it is culled from underneath and the sky shows
+      // through it — guardrails and kerb markers hanging over an empty gap wherever a
+      // switchback passes above you. Raycaster honours `material.side` exactly as the
+      // rasteriser does, so probing from both directions is a faithful test of what the
+      // player will actually see.
+      const spline = new TrackSpline(getStageDef(stageId));
+      const road = new RoadMesh(spline);
+      const raycaster = new THREE.Raycaster();
+      const samples = spline.getAllSamples();
+
+      let above = 0;
+      let below = 0;
+      let probes = 0;
+      for (let i = 0; i < samples.length; i += 20) {
+        const s = samples[i];
+        probes++;
+        raycaster.set(new THREE.Vector3(s.x, s.y + 30, s.z), new THREE.Vector3(0, -1, 0));
+        if (raycaster.intersectObject(road.mesh, true).length > 0) above++;
+        raycaster.set(new THREE.Vector3(s.x, s.y - 30, s.z), new THREE.Vector3(0, 1, 0));
+        if (raycaster.intersectObject(road.mesh, true).length > 0) below++;
+      }
+
+      assert.ok(above > probes * 0.9, `${stageId}: deck missing from ABOVE at ${probes - above}/${probes} probes`);
+      assert.strictEqual(
+        below,
+        above,
+        `${stageId}: the deck is visible from above at ${above}/${probes} probe points but from ` +
+          `below at only ${below} — it is see-through from underneath, so the sky shows where the ` +
+          `carriageway should be`
       );
     });
   }
