@@ -14,6 +14,7 @@ import { describe, it } from "node:test";
 import { createRunToken, verifyRunToken } from "../src/lib/runToken";
 import { SIM_VERSION } from "../src/game/vehicle/vehicleTuning";
 import { getStageDef } from "../src/game/track/stages";
+import { CAR_DEFS } from "../src/game/vehicle/cars";
 
 describe("Leaderboard HMAC Tokens & Submission Security", () => {
   const stageId = "borbera-sprint";
@@ -79,10 +80,33 @@ describe("Leaderboard HMAC Tokens & Submission Security", () => {
         stage.bronzeTime > stage.silverTime,
         `${stageKey}: bronze time (${stage.bronzeTime}s) must be greater than silver time (${stage.silverTime}s)`
       );
+    }
+  });
 
-      // Floor time must be at least 70% of gold time
-      const floorTimeMs = Math.round(stage.goldTime * 0.8 * 1000);
-      assert.ok(floorTimeMs > 50000, `${stageKey}: floor time must be realistic for a mountain stage`);
+  it("the anti-cheat floor is a physical bound derived from the car, not from the reward-tier gold time", () => {
+    // See validate.ts: floor = (stage.length / car.vMax) * FLOOR_MARGIN. Mirrored here rather
+    // than imported so this test still catches it if a future edit quietly re-derives the
+    // floor from goldTime/silverTime/bronzeTime again — the exact regression that let a real,
+    // replay-verified 1:49.416 Gold run on Borbera Sprint get rejected as "impossibly fast"
+    // once the route was shortened and gold time was not.
+    const FLOOR_MARGIN = 0.85;
+    for (const stageKey of ["borbera-sprint", "salita-cosola"]) {
+      const stage = getStageDef(stageKey);
+      for (const car of Object.values(CAR_DEFS)) {
+        const floorTimeMs = Math.round((stage.length / car.vMax) * FLOOR_MARGIN * 1000);
+        // Gold time is itself an attained, verified-achievable pace (not a ceiling) — the
+        // whole point of the medal system is that players reach it and beat it. If the floor
+        // ever reached or exceeded gold time, hitting gold itself would risk the "impossibly
+        // fast" rejection, which would defeat the medal system for its own top tier. This is
+        // deliberately per-car (a slower car's floor sits closer to gold, since gold is one
+        // stage-wide number every car is graded against) rather than a single stage-wide ratio.
+        assert.ok(
+          floorTimeMs < stage.goldTime * 1000,
+          `${stageKey}/${car.id}: anti-cheat floor (${floorTimeMs}ms) is not below gold time ` +
+            `(${stage.goldTime * 1000}ms) — a run AT gold pace in this car could be falsely rejected`
+        );
+        assert.ok(floorTimeMs > 0, `${stageKey}/${car.id}: floor time must be positive`);
+      }
     }
   });
 });

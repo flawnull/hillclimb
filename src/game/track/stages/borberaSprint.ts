@@ -1,7 +1,21 @@
 /**
  * VAL BORBERA HILLCLIMB — Stage 1: Borbera Sprint
- * Route: Cabella Ligure ↔ Rocchetta Ligure (4.2 km, 560m -> 430m)
+ * Route: Cabella Ligure ↔ Rocchetta Ligure (3.7 km, 560m -> 430m)
  * Fast valley sprint, stone bridges across the Borbera river, flowing sweepers.
+ *
+ * Gold/silver/bronze below were carried over unchanged from an earlier ~4.2 km version of
+ * this route (see salitaCosola.ts for the sibling stage, which documents its own
+ * shortening and was re-measured against its current layout — this one never was).
+ * Re-measured for the current 3.7 km layout.
+ *
+ * These numbers used to also set the anti-cheat floor (80% of gold time in validate.ts),
+ * so the stale 160.0 s gold produced a 128000 ms floor that rejected a real, Gold-trophy,
+ * replay-verified 1:49.416 (109416 ms) finish as "impossibly fast" — not because the run was
+ * suspicious, but because gold/silver/bronze are reward-tier numbers, not physical bounds,
+ * and this route edit let them drift past what a skilled player could actually still do. The
+ * floor is now derived in validate.ts from the route's length and the submitted car's own
+ * top speed instead, so a future difficulty-tuning pass on these three numbers can never
+ * again reject someone's real lap.
  */
 
 import { TrackBuilder } from "../authoring/trackBuilder";
@@ -49,8 +63,8 @@ export function createBorberaSprintStage(): StageDef {
     'borbera-sprint',
     'Borbera Sprint',
     'Cabella Ligure ↔ Rocchetta Ligure',
-    160.0, // Gold: 2:40
-    185.0, // Silver: 3:05
-    215.0  // Bronze: 3:35
+    120.0, // Gold: 2:00
+    140.0, // Silver: 2:20
+    160.0  // Bronze: 2:40
   );
 }

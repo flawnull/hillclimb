@@ -39,7 +39,8 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
     engine.startRun();
 
     let cachedS = 0;
-    // Scripted trace over 8000 physics steps (~133.3 seconds, exceeding gold floor of 128s)
+    // Scripted trace over 8000 physics steps (~133.3 seconds, exceeding the anti-cheat floor
+    // of ~51s for this car/stage — see validate.ts, floor = stage.length / car.vMax * 0.85)
     for (let step = 0; step < 8000; step++) {
       const s = engine.vehicle.state;
       const proj = spline.projectFrenet(s.pos.x, s.pos.z, cachedS);
@@ -135,7 +136,8 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
     engine.startRun();
 
     let cachedS = 0;
-    // Scripted driving trace over 25,000 physics steps (~416.7 seconds, exceeding gold floor of 408s)
+    // Scripted driving trace over 7000 physics steps (~116.7 seconds, comfortably clearing
+    // the anti-cheat floor of ~30s for this car/stage — see validate.ts)
     for (let step = 0; step < 7000; step++) {
       const s = engine.vehicle.state;
       const proj = spline.projectFrenet(s.pos.x, s.pos.z, cachedS);
@@ -208,8 +210,8 @@ describe("Anti-Cheat Re-Simulation & Determinism Suite", () => {
     };
 
     const result = await validateRunSubmission(payload);
-    // The scripted driver does NOT complete the stage — it stalls around s=2300/3735 on
-    // Borbera Sprint, looping through off-road respawns. What this test actually proves is
+    // The scripted driver does NOT complete the stage — it stalls partway through Salita di
+    // Cosola, looping through off-road respawns. What this test actually proves is
     // DETERMINISM: that the server's re-simulation reproduces the client engine's time and
     // penalties within the 5 ms tolerance. Since the completion check runs last, failing
     // *only* on completion means every earlier gate — token, hash, floor time, and the
@@ -692,7 +694,8 @@ describe("Forged submissions are rejected", () => {
   const idleFrame = { steer: 0, throttle: 0, brake: 0, handbrake: 0 };
 
   it("rejects an idle replay that never crosses a checkpoint", async () => {
-    // Long enough to clear the 80%-of-gold floor time, so every other gate passes.
+    // Long enough (a full gold-time's worth of frames) to clear the anti-cheat floor, so
+    // every other gate passes.
     const frameCount = Math.ceil(stage.goldTime * 60);
     const timeMs = Math.round((frameCount / 60) * 1000);
     const result = await validateRunSubmission(await forge(Array(frameCount).fill(idleFrame), timeMs));

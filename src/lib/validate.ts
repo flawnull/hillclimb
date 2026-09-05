@@ -227,8 +227,27 @@ export async function validateRunSubmission(payload: SubmitRunPayload): Promise<
     }
   }
 
-  // Floor time is 80% of gold time
-  const floorTimeMs = Math.round(stage.goldTime * 0.8 * 1000);
+  // Floor time: a hard PHYSICAL bound, not a skill guess.
+  //
+  // This used to be 80% of the stage's gold time — a display/reward-tier number tuned for
+  // roughly what a solid clean lap looks like, not for what the fastest possible lap is. A
+  // route edit (Borbera Sprint's gold time was carried over from a ~4.2 km version of the
+  // route it no longer measures) let that floor drift above times a genuinely skilled human
+  // could still legitimately post, and it rejected one: a real, replay-verified 1:49.416
+  // Gold-trophy run came in under a floor that had nothing to do with what the car could
+  // actually do on that road. Tying the reject threshold to a difficulty/reward number will
+  // always carry that risk, and a skilled player should never be second-guessed by a number
+  // that was never meant to bound anything.
+  //
+  // `stage.length / car.vMax` is what it takes to cover the route at the submitted car's own
+  // top speed in a dead straight line, with zero cornering loss, braking, or elevation cost —
+  // physically unbeatable regardless of driver skill (verified: even the steepest downhill
+  // grade on either stage settles below vMax, never above it, so vMax is a genuine ceiling,
+  // not just a target). FLOOR_MARGIN keeps the reject threshold safely below even that
+  // impossible ideal, so this only ever catches a time that is faster than the fastest car in
+  // the game could manage with every corner removed — never a merely excellent one.
+  const FLOOR_MARGIN = 0.85;
+  const floorTimeMs = Math.round((stage.length / car.vMax) * FLOOR_MARGIN * 1000);
   const submittedTotalMs = timeMs + (penaltyMs || 0);
   if (submittedTotalMs < floorTimeMs) {
     return { valid: false, reason: `Time is impossibly fast for this stage (floor: ${floorTimeMs}ms)` };
