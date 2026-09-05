@@ -408,7 +408,16 @@ export function beginTerrainMesh(field: HeightField): {
       isSkirt.push(1);
       skirtBottomToTop.set(b1, t1);
 
-      indices.push(t0, b0, t1, t1, b0, b1);
+      // Wound so the face points OUTWARD, away from this leaf and toward the coarser
+      // neighbour the skirt is hiding the gap from — the opposite sense from `quad()`
+      // above, whose CCW-from-above convention is right for a horizontal surface but
+      // backwards for a vertical wall. With the horizontal winding here instead, every
+      // skirt's front face pointed back into the leaf's own solid ground: invisible to
+      // any camera, which only ever stands on the outside of the terrain, so `FrontSide`
+      // culled it and the LOD crack it exists to hide showed through as a hole letting
+      // the sky show — worst against open sky at the horizon, since a failed skirt
+      // nearer the road exposes more (equally-coloured) ground behind it instead.
+      indices.push(t0, t1, b0, t1, b1, b0);
       skirtTriangleCount += 2;
     }
   };
@@ -490,7 +499,7 @@ export function beginTerrainMesh(field: HeightField): {
   // ground from skirt (e.g. a raycast coverage check) should treat a triangle as a skirt
   // triangle when ANY of its three vertices is flagged, not when all three are: a skirt
   // triangle always shares its top edge with the surface quad it hangs from (see the
-  // `indices.push(t0, b0, t1, t1, b0, b1)` above), so it always has 1-2 surface-tagged
+  // `indices.push(t0, t1, b0, t1, b1, b0)` above), so it always has 1-2 surface-tagged
   // corners and never all three flagged.
   geometry.setAttribute("isSkirt", new THREE.Float32BufferAttribute(isSkirt, 1));
   geometry.setIndex(indices);
