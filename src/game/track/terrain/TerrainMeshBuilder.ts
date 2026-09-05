@@ -378,10 +378,32 @@ export function beginTerrainMesh(field: HeightField): {
       // position (see resolvedLeafSizeAt above for why the raw/approximate forms
       // over-skirt almost every edge).
       const neighbourLeafSize = resolvedLeafSizeAt(nx, nz);
-      // Skirt only when the neighbour is STRICTLY coarser than this leaf. Same-size
-      // neighbours (the common case) need no skirt: their shared edge is built from the
-      // same two corner vertices on both sides, so there is no crack to hide.
-      if (neighbourLeafSize <= size + 1e-6) continue;
+      // BOTH SIDES OF A SIZE MISMATCH SKIRT. Only same-size neighbours are skipped, and
+      // those genuinely need nothing: their shared edge is built from the same two corner
+      // vertices on both sides, so there is no crack to hide.
+      //
+      // Skirting only the finer side covers exactly one of the two ways an LOD boundary can
+      // open. Along the shared edge the fine side is a polyline through the real field while
+      // the coarse side is one straight segment between its own corners, and the curtain
+      // hangs DOWNWARD from whichever cell emits it:
+      //
+      //   coarse edge below the fine edge — the fine cell's curtain spans the difference.
+      //   coarse edge ABOVE the fine edge — that curtain hangs the other way, away from the
+      //     gap, and the coarse cell emitted nothing because its neighbour was finer. The
+      //     slot between the two surfaces was left open, and since the coarse quad's
+      //     underside is back-facing it is culled too, so the line of sight goes straight
+      //     through the hill and out to the sky.
+      //
+      // Measured before this change: 218 boundaries on Borbera Sprint and 425 on Salita di
+      // Cosola had an unspanned gap over 0.5 m, the worst 10.5 m of open slot, and the worst
+      // cases were 128 m cells against 256 m ones roughly a kilometre from the road — which
+      // is why this only ever showed on the distant mountains, where the cells are largest
+      // and nothing subdivides for relief (see RELIEF_GATE_DIST).
+      //
+      // The coarse cell's own curtain, hanging from its straight edge down past the fine
+      // surface, is exactly the missing piece. A redundant skirt is invisible — it sits
+      // inside the hill — so covering both directions costs only the triangles.
+      if (Math.abs(neighbourLeafSize - size) < 1e-6) continue;
 
       const t0 = vertexAt(x0, z0);
       const t1 = vertexAt(x1, z1);

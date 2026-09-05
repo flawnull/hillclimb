@@ -48,6 +48,92 @@ describe("leafSizeAt", () => {
   });
 });
 
+describe("Terrain is opaque along a line of sight", () => {
+  for (const entry of STAGE_LIST) {
+    it(`${entry.id}: you cannot see sky through a hill that stands in the way`, () => {
+      // Every other coverage case here fires STRAIGHT DOWN, and a vertical ray is close to
+      // parallel with the vertical skirts that close LOD boundaries — so it slips past the
+      // one class of hole a player actually reports: cracks in the distant mountains with
+      // sky behind them.
+      //
+      // The hole was real. A skirt used to be emitted only by the FINER cell at a boundary,
+      // hanging downward from its edge, which covers the coarse-below-fine case and nothing
+      // else. Where the coarse quad's straight edge sat ABOVE the fine polyline, the curtain
+      // hung away from the gap and the coarse cell emitted none of its own, so the slot
+      // between the two surfaces stayed open — and the coarse quad's underside is
+      // back-facing, hence culled, so the line of sight went through the hill and out to the
+      // sky. Measured before the fix: 218 such boundaries on Borbera Sprint and 425 on
+      // Salita di Cosola, the worst a 10.5 m slot, and the worst of those roughly a
+      // kilometre out where the cells are largest.
+      //
+      // This asserts the property directly, and in the geometry a player looks along: march
+      // the HEIGHT FIELD across the ray to decide whether ground should be in the way, and
+      // if it should be, require the built MESH to stop the ray.
+      const spline = new TrackSpline(getStageDef(entry.id));
+      const field = createHeightField(spline);
+      const mesh = buildTerrainMesh(field);
+      mesh.updateMatrixWorld(true);
+
+      // How far the field must rise above the sightline before this insists the mesh block
+      // it. At horizon LOD a cell is 256 m across and the mesh is a flat approximation of the
+      // field, so ground that only grazes the sightline can legitimately be rendered below
+      // it — that is LOD, not a hole. Six metres is well clear of that and still far under
+      // the 10.5 m slots the missing coarse-side skirts were leaving open.
+      const BLOCK_MARGIN = 6.0;
+
+      const raycaster = new THREE.Raycaster();
+      const all = spline.getAllSamples();
+      let seeThrough = 0;
+      let tested = 0;
+      const worst: string[] = [];
+
+      for (let i = 10; i < all.length - 10; i += 97) {
+        const s = all[i];
+        for (const bearing of [0.6, 1.4, 2.2, 3.0, 3.8, 4.6, 5.4]) {
+          const dx = Math.sin(bearing);
+          const dz = Math.cos(bearing);
+          // Eye height above the road, looking level: the driver's own view outward.
+          const eyeY = s.y + 2.0;
+          const RANGE = 1200;
+          const STEP = 6;
+
+          // Does the field put ground above this level line anywhere along it?
+          let blockAt = -1;
+          for (let d = 40; d < RANGE; d += STEP) {
+            if (field.heightAt(s.x + dx * d, s.z + dz * d) > eyeY + BLOCK_MARGIN) {
+              blockAt = d;
+              break;
+            }
+          }
+          if (blockAt < 0) continue; // open sky in this direction, nothing to assert
+          tested++;
+
+          raycaster.set(new THREE.Vector3(s.x, eyeY, s.z), new THREE.Vector3(dx, 0, dz).normalize());
+          raycaster.far = RANGE;
+          const hits = raycaster.intersectObject(mesh, true);
+          if (hits.length === 0) {
+            seeThrough++;
+            if (worst.length < 3) {
+              worst.push(
+                `at (${s.x.toFixed(0)},${s.z.toFixed(0)}) bearing ${bearing.toFixed(1)} the field rises ` +
+                  `above the sightline by ${blockAt} m out, but the mesh stops nothing`
+              );
+            }
+          }
+        }
+      }
+
+      assert.ok(tested > 20, `${entry.id}: only ${tested} blocked sightlines found, too few to judge`);
+      assert.strictEqual(
+        seeThrough,
+        0,
+        `${entry.id}: ${seeThrough} of ${tested} sightlines pass straight through ground that should ` +
+          `block them — sky is visible through the terrain. ${worst.join("; ")}`
+      );
+    });
+  }
+});
+
 describe("Terrain surface coverage", () => {
   for (const entry of STAGE_LIST) {
     it(`${entry.id}: a downward ray hits the terrain exactly once`, () => {
