@@ -7,7 +7,7 @@
  */
 
 import * as THREE from "three";
-import { TrackSpline, SplineSample } from "../TrackSpline";
+import { TrackSpline } from "../TrackSpline";
 import { chunkMeshBySpace } from "../batchStatics";
 import { createHeightField, HeightField } from "./heightField";
 import { buildChunkedTerrain, buildChunkedTerrainAsync } from "./TerrainMeshBuilder";
@@ -461,86 +461,108 @@ export class TerrainSystem {
     const samples = this.spline.getAllSamples();
     if (samples.length < 2) return new THREE.Mesh();
 
+    // ONE CONTINUOUS RIVER, ON ONE SIDE, LYING IN THE GROUND RATHER THAN ON IT.
+    //
+    // The previous build had three separate reasons to read as blue paint on a lawn.
+    //
+    // It sat at `heightAt(x, z) + 0.35`, i.e. deliberately 35 cm ABOVE whatever the ground
+    // happened to be, with no channel anywhere — so it draped over the meadow like a ribbon
+    // instead of running in a bed.
+    //
+    // Its side was taken per-sample from `exposure`, which is a road-authoring flag about
+    // which verge has a drop, not a statement about where the valley is. Wherever a segment
+    // declared `none` the run was dropped entirely, and where the flag flipped the water
+    // jumped 240 m across the road to the other side. The result was disconnected blue
+    // shards that changed sides — the "not connected to anything" report.
+    //
+    // And it was `#2563eb` at metalness 0.55: a saturated primary blue, which is why it read
+    // as plastic rather than water.
+    //
+    // Now: the side is decided ONCE for the whole stage, every station gets a cross-section
+    // so the strip is unbroken, and the surface is placed from the LOWEST ground across the
+    // channel rather than from the centreline — then smoothed along its length, because a
+    // water surface does not follow every bump in the terrain, and finally clamped back below
+    // that local minimum so the banks always stand out of it.
     const RIVER_DIST = 120;
     const RIVER_WIDTH = 14;
-    const MIN_RUN = 12;
+    /** Cross-sections every Nth spline sample: at ~1.2 m a sample, every 4th is still far
+     *  smoother than a river needs and costs a quarter of the triangles. */
+    const STRIDE = 4;
+    /** Probes across the channel when looking for the valley bottom. */
+    const PROBES = 5;
+    /** Half-width of the along-stream smoothing window, in kept stations. */
+    const SMOOTH = 12;
 
-    /** Depth of the deck edge shown beneath the carriageway on a viaduct span, metres. */
-    const DECK_FASCIA = 1.1;
-    /** Emit a pier every this many kept samples. Sparse on purpose: a pier every few metres
-     *  reads as scaffolding rather than as a viaduct. */
-    const PIER_EVERY = 9;
+    // Which side of the road the valley is on. Decided once, by majority, so the river
+    // cannot change banks partway down the stage.
+    let leftVotes = 0;
+    let rightVotes = 0;
+    for (const s of samples) {
+      if (s.exposure === "left") leftVotes++;
+      else if (s.exposure === "right" || s.exposure === "both") rightVotes++;
+    }
+    const side: -1 | 1 = leftVotes > rightVotes ? -1 : 1;
+
+    const kept: number[] = [];
+    for (let i = 0; i < samples.length; i += STRIDE) kept.push(i);
+    if (kept[kept.length - 1] !== samples.length - 1) kept.push(samples.length - 1);
+
+    // Centre of the channel, and the lowest ground across it, per kept station.
+    const cxs: number[] = [];
+    const czs: number[] = [];
+    const bed: number[] = [];
+    for (const i of kept) {
+      const s = samples[i];
+      const x = s.x + s.normalX * RIVER_DIST * side;
+      const z = s.z + s.normalZ * RIVER_DIST * side;
+      cxs.push(x);
+      czs.push(z);
+      let lo = Infinity;
+      for (let p = 0; p < PROBES; p++) {
+        const t = (p / (PROBES - 1) - 0.5) * (RIVER_WIDTH + 6);
+        const h = this.field.heightAt(x + s.normalX * t, z + s.normalZ * t);
+        if (h < lo) lo = h;
+      }
+      bed.push(lo);
+    }
+
+    const level: number[] = [];
+    for (let i = 0; i < bed.length; i++) {
+      let sum = 0;
+      let n = 0;
+      for (let k = -SMOOTH; k <= SMOOTH; k++) {
+        const j = i + k;
+        if (j < 0 || j >= bed.length) continue;
+        sum += bed[j];
+        n++;
+      }
+      // The smoothed surface, clamped to this station's own channel bottom so the water can
+      // never climb out onto the bank on a rise, then lifted a token 5 cm.
+      //
+      // Not sunk BELOW the bottom, which is the obvious thing and is wrong here: the terrain
+      // has no channel cut for the river — the valley floor through this stretch is close to
+      // flat — so water placed under the ground is simply buried by it and the Borbera
+      // disappears entirely. Five centimetres above the lowest point across the channel is
+      // enough to draw while still reading as water lying IN the low ground, which is what
+      // the wide braided gravel bed of the real river looks like. Properly sinking it needs a
+      // channel carved into the height field itself; until then this is the honest maximum.
+      level.push(Math.min(sum / n, bed[i]) + 0.05);
+    }
 
     const verts: number[] = [];
     const indices: number[] = [];
-    const piers: { x: number; z: number; top: number; bottom: number }[] = [];
-
-    const sideOf = (s: SplineSample): -1 | 0 | 1 => {
-      if (s.exposure === "left") return -1;
-      if (s.exposure === "right") return 1;
-      if (s.exposure === "both") return 1;
-      return 0;
-    };
-
-    const flushRun = (from: number, to: number, side: -1 | 0 | 1) => {
-      if (side === 0) return;
-      if (to - from < MIN_RUN) return;
-
-      const base = verts.length / 3;
-      for (let i = from; i <= to; i++) {
-        const s = samples[i];
-        const lat = RIVER_DIST * side;
-        const cx = s.x + s.normalX * lat;
-        const cz = s.z + s.normalZ * lat;
-        // Sit the water on the surface that is actually drawn, at this world point.
-        const y = this.field.heightAt(cx, cz) + 0.35;
-
-        verts.push(
-          cx - s.normalX * (RIVER_WIDTH / 2), y, cz - s.normalZ * (RIVER_WIDTH / 2),
-          cx + s.normalX * (RIVER_WIDTH / 2), y, cz + s.normalZ * (RIVER_WIDTH / 2)
-        );
-      }
-
-      const rows = to - from + 1;
-      for (let r = 0; r < rows - 1; r++) {
-        const a = base + r * 2;
-        const b = base + (r + 1) * 2;
-        indices.push(a, b, a + 1, a + 1, b, b + 1);
-      }
-    };
-
-    let runStart = 0;
-    let runSide = sideOf(samples[0]);
-    for (let i = 1; i < samples.length; i++) {
-      const side = sideOf(samples[i]);
-      if (side !== runSide) {
-        flushRun(runStart, i - 1, runSide);
-        runStart = i;
-        runSide = side;
-      }
+    for (let r = 0; r < kept.length; r++) {
+      const s = samples[kept[r]];
+      const y = level[r];
+      verts.push(
+        cxs[r] - s.normalX * (RIVER_WIDTH / 2), y, czs[r] - s.normalZ * (RIVER_WIDTH / 2),
+        cxs[r] + s.normalX * (RIVER_WIDTH / 2), y, czs[r] + s.normalZ * (RIVER_WIDTH / 2)
+      );
     }
-    flushRun(runStart, samples.length - 1, runSide);
-
-    // Piers: a square column from the underside of the deck down to the ground.
-    //
-    // No length cap. Capping at 45 m meant that anywhere the ground was further below than
-    // that, the column simply stopped in the air — piers that visibly failed to touch the
-    // earth, which is exactly the thing a viaduct exists to avoid. A pier either reaches the
-    // ground or is not emitted at all (see the blocking check above).
-    for (const p of piers) {
-      // Chunky enough to read as a concrete pier at speed rather than as a wire.
-      const half = 0.95;
-      const bottom = p.bottom;
-      const base = verts.length / 3;
-      for (const [dx, dz] of [[-half, -half], [half, -half], [half, half], [-half, half]] as const) {
-        verts.push(p.x + dx, p.top, p.z + dz);
-        verts.push(p.x + dx, bottom, p.z + dz);
-      }
-      for (let f = 0; f < 4; f++) {
-        const a = base + f * 2;
-        const b = base + ((f + 1) % 4) * 2;
-        indices.push(a, a + 1, b, b, a + 1, b + 1);
-      }
+    for (let r = 0; r < kept.length - 1; r++) {
+      const a = r * 2;
+      const b = (r + 1) * 2;
+      indices.push(a, b, a + 1, a + 1, b, b + 1);
     }
 
     const geo = new THREE.BufferGeometry();
@@ -549,12 +571,14 @@ export class TerrainSystem {
     orientTrianglesUpward(geo);
     geo.computeVertexNormals();
 
+    // Mountain river, not swimming pool: desaturated and much less metallic, so it takes its
+    // colour mostly from the sky and the bed rather than glowing on its own.
     const mat = new THREE.MeshStandardMaterial({
-      color: "#2563eb",
-      roughness: 0.15,
-      metalness: 0.55,
+      color: "#41708c",
+      roughness: 0.30,
+      metalness: 0.25,
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.86,
     });
 
     return new THREE.Mesh(geo, mat);
