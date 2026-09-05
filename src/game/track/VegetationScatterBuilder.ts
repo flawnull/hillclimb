@@ -111,40 +111,55 @@ export function buildInstancedVegetation(
   const samples = spline.getAllSamples();
   const count = Math.min(450, Math.floor(samples.length * 1.1));
 
+  // THE TREES ARE THE SCENE'S BUDGET, SO THEY ARE BUILT CHEAPLY.
+  //
+  // Measured across the whole stage: vegetation was 123,896 of Borbera Sprint's 202,730
+  // triangles — 61% of everything, three times the terrain — and it also cast shadows, so
+  // 115,368 of those were submitted a SECOND time for the shadow map. 326,554 triangles a
+  // frame against this project's own documented budget of about 250,000.
+  //
+  // None of that bought detail anyone can see. An olive was 256 triangles because its canopy
+  // was two 8x8 spheres; at the size these are drawn, a 6x4 sphere is the same green blob for
+  // a third of the cost. The trunks are cylinders whose end caps are buried in the ground and
+  // under the canopy, so they are open-ended now — the caps were pure waste. Segment counts
+  // below are chosen per species by what actually shows in silhouette: a cypress is a cone
+  // seen against the sky and keeps more sides than an olive lobe, which never reads as
+  // anything but a rounded mass.
+  //
   // 1. Italian Stone Pine
-  const pineTrunk = colorGeo(new THREE.CylinderGeometry(0.20, 0.36, 5.2, 8), "#4a2c11");
+  const pineTrunk = colorGeo(new THREE.CylinderGeometry(0.20, 0.36, 5.2, 6, 1, true), "#4a2c11");
   pineTrunk.translate(0, 2.6, 0);
-  const pineTier1 = colorGeo(new THREE.ConeGeometry(3.8, 1.6, 12), "#1b431b");
+  const pineTier1 = colorGeo(new THREE.ConeGeometry(3.8, 1.6, 8), "#1b431b");
   pineTier1.translate(0, 5.4, 0);
-  const pineTier2 = colorGeo(new THREE.ConeGeometry(2.6, 1.4, 10), "#235323");
+  const pineTier2 = colorGeo(new THREE.ConeGeometry(2.6, 1.4, 7), "#235323");
   pineTier2.translate(0, 6.2, 0);
   const pineGeo = mergeGeometries([pineTrunk, pineTier1, pineTier2]);
   const pineMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.FrontSide, transparent: false, depthWrite: true });
 
   // 2. Ligurian Cypress
-  const cypTrunk = colorGeo(new THREE.CylinderGeometry(0.18, 0.26, 1.8, 8), "#3d2b1f");
+  const cypTrunk = colorGeo(new THREE.CylinderGeometry(0.18, 0.26, 1.8, 6, 1, true), "#3d2b1f");
   cypTrunk.translate(0, 0.9, 0);
-  const cypCone = colorGeo(new THREE.ConeGeometry(1.2, 6.8, 10), "#143314");
+  const cypCone = colorGeo(new THREE.ConeGeometry(1.2, 6.8, 8), "#143314");
   cypCone.translate(0, 4.8, 0);
   const cypGeo = mergeGeometries([cypTrunk, cypCone]);
   const cypMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.80, side: THREE.FrontSide, transparent: false, depthWrite: true });
 
   // 3. Ligurian Olive Trees
-  const oliveTrunk = colorGeo(new THREE.CylinderGeometry(0.26, 0.42, 2.6, 8), "#5c4a38");
+  const oliveTrunk = colorGeo(new THREE.CylinderGeometry(0.26, 0.42, 2.6, 6, 1, true), "#5c4a38");
   oliveTrunk.translate(0, 1.3, 0);
-  const oliveLobe1 = colorGeo(new THREE.SphereGeometry(2.0, 8, 8), "#556b2f");
+  const oliveLobe1 = colorGeo(new THREE.SphereGeometry(2.0, 6, 4), "#556b2f");
   oliveLobe1.translate(0, 3.2, 0);
-  const oliveLobe2 = colorGeo(new THREE.SphereGeometry(1.6, 8, 8), "#6b8e23");
+  const oliveLobe2 = colorGeo(new THREE.SphereGeometry(1.6, 5, 3), "#6b8e23");
   oliveLobe2.translate(0.6, 3.6, 0.3);
   const oliveGeo = mergeGeometries([oliveTrunk, oliveLobe1, oliveLobe2]);
   const oliveMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, side: THREE.FrontSide, transparent: false, depthWrite: true });
 
   // 4. Mountain Chestnut & Beech Woods
-  const chestnutTrunk = colorGeo(new THREE.CylinderGeometry(0.32, 0.50, 3.8, 8), "#3b2314");
+  const chestnutTrunk = colorGeo(new THREE.CylinderGeometry(0.32, 0.50, 3.8, 6, 1, true), "#3b2314");
   chestnutTrunk.translate(0, 1.9, 0);
-  const chestnutLobe1 = colorGeo(new THREE.SphereGeometry(3.0, 9, 9), "#2d5a27");
+  const chestnutLobe1 = colorGeo(new THREE.SphereGeometry(3.0, 6, 4), "#2d5a27");
   chestnutLobe1.translate(0, 4.4, 0);
-  const chestnutLobe2 = colorGeo(new THREE.SphereGeometry(2.2, 8, 8), "#387030");
+  const chestnutLobe2 = colorGeo(new THREE.SphereGeometry(2.2, 5, 3), "#387030");
   chestnutLobe2.translate(-0.8, 5.0, 0.6);
   const chestnutGeo = mergeGeometries([chestnutTrunk, chestnutLobe1, chestnutLobe2]);
   const chestnutMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.80, side: THREE.FrontSide, transparent: false, depthWrite: true });
@@ -376,6 +391,16 @@ export function buildInstancedVegetation(
    */
   const SCRUB_CHUNK_M = 360;
 
+  /**
+   * Lateral distance from the centreline beyond which a chunk is not asked to cast shadows.
+   *
+   * The directional light's shadow camera is 120 m across (`shadow.camera.left/right = -60/60`
+   * in GameRenderer) and follows the car, so a tree further out than this cannot put a shadow
+   * inside it. 90 m rather than 60 leaves margin for the light's angle, which lets ground just
+   * outside the box still throw a shadow into it.
+   */
+  const SHADOW_RANGE_M = 90;
+
   const perSpecies: Record<string, { geo: THREE.BufferGeometry; mat: THREE.Material }> = {
     "veg-pine": { geo: pineGeo, mat: pineMat },
     "veg-cypress": { geo: cypGeo, mat: cypMat },
@@ -403,9 +428,22 @@ export function buildInstancedVegetation(
     // Named by species, not by cell: tests and any future per-species logic group on this,
     // and which cell an instance landed in is an implementation detail of the culler.
     mesh.name = species;
-    // Background filler doesn't need to cast shadows: it's far enough out that a missing
-    // shadow is invisible, and skipping it halves the shadow-pass draw calls this adds.
-    mesh.castShadow = species !== "veg-rock" && species !== "veg-scrub";
+
+    // ONLY CHUNKS THE SHADOW CAMERA CAN ACTUALLY SEE CAST SHADOWS.
+    //
+    // A caster is drawn twice: once for the frame and once into the shadow map. Vegetation
+    // was 115,368 of the 123,896 triangles it contributes on Borbera Sprint, so the whole
+    // forest was being submitted a second time every frame — and the directional light's
+    // shadow box only spans about 120 m around the car, so nearly all of that second pass
+    // fell outside it and drew nothing. The module note above measured the same effect from
+    // the other end: a camera sweep cost 29.1 s with shadows against 5.9 s without.
+    //
+    // Shadow casting is per-mesh, not per-instance, but the instances are already bucketed
+    // by cell — so a chunk whose nearest corner is beyond the shadow box can be excluded
+    // wholesale. Trees beside the road, which are the ones whose shadows are actually seen,
+    // keep theirs.
+    const nearRoute = list.some((pl) => Math.abs(spline.projectFrenet(pl.x, pl.z).t) < SHADOW_RANGE_M);
+    mesh.castShadow = species !== "veg-rock" && species !== "veg-scrub" && nearRoute;
     // Instance matrices are baked at build time and never move, so the bounding volume the
     // culler needs can be computed once. Without this three.js falls back to the geometry's
     // own sphere, which ignores the instance offsets entirely and would cull cells wrongly.

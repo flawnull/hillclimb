@@ -121,6 +121,48 @@ describe("Scene budget", () => {
   }
 
   for (const entry of STAGE_LIST) {
+    it(`${entry.id} stays within its real per-frame geometry budget`, () => {
+      // `countRenderables` counts an InstancedMesh's geometry ONCE, however many instances it
+      // carries, so every ceiling above was blind to the scatter — which is where the cost
+      // actually was. Measured through that blind spot: vegetation was 123,896 of Borbera
+      // Sprint's 202,730 triangles, three times the terrain, and it cast shadows, so 115,368
+      // of them were submitted a second time for the shadow map. 326,554 triangles a frame
+      // against a documented budget of about 250,000, and not one of the assertions above
+      // could see it.
+      //
+      // This counts what the GPU is actually asked to draw: instances multiplied out, plus
+      // every caster again for the shadow pass.
+      const { root } = buildStageScene(entry.id);
+      let tris = 0;
+      let shadowTris = 0;
+      root.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry?.attributes?.position) return;
+        const g = mesh.geometry;
+        const per = g.index ? g.index.count / 3 : g.attributes.position.count / 3;
+        const instances = (mesh as unknown as THREE.InstancedMesh).isInstancedMesh
+          ? (mesh as unknown as THREE.InstancedMesh).count
+          : 1;
+        tris += per * instances;
+        if (mesh.castShadow) shadowTris += per * instances;
+      });
+      const submitted = Math.round(tris + shadowTris);
+
+      // Measured after cutting the tree models down and limiting shadow casting to the chunks
+      // the shadow camera can actually see: 164,882 on Borbera Sprint and 184,706 on Salita di
+      // Cosola. The ceiling keeps ~20% headroom and is still comfortably under the 250,000 the
+      // project budgets for.
+      assert.ok(
+        submitted < 225_000,
+        `${entry.id}: ${submitted} triangles submitted per frame (${Math.round(tris)} drawn + ` +
+          `${Math.round(shadowTris)} redrawn for the shadow map). The scatter is instanced, so the ` +
+          `mesh and triangle ceilings above cannot see this — check tree model complexity and ` +
+          `which chunks are set to cast shadows.`
+      );
+    });
+  }
+
+  for (const entry of STAGE_LIST) {
     it(`${entry.id} batches its roadside props into few, well-filled draws`, () => {
       const spline = new TrackSpline(getStageDef(entry.id));
       const road = new RoadMesh(spline);
