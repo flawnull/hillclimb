@@ -33,8 +33,20 @@ const CAMERA_FAR = 6000;
  * The cooldown covers the reallocation `setPixelRatio` performs plus the frames either side
  * of it, so the change is never counted as evidence for the next one.
  */
-const FPS_WINDOW = 45;
-const DPR_CHANGE_COOLDOWN_S = 1.0;
+const FPS_WINDOW = 15;
+const DPR_CHANGE_COOLDOWN_S = 0.4;
+/**
+ * Median frame rate below which the scaler stops waiting out its usual sustain window and
+ * steps down after `URGENT_SUSTAIN_S` instead.
+ *
+ * Robust averaging fixed the ratchet but made the controller slow, and slow is its own
+ * failure: on a machine that genuinely cannot hold the frame rate, every second spent
+ * deliberating is a second of lag. A median this far under target is not a transient — no
+ * amount of further waiting will change the verdict — so there is nothing to gain by
+ * sitting on it.
+ */
+const URGENT_FPS = 42;
+const URGENT_SUSTAIN_S = 0.35;
 
 // Hoisted so the render loop never parses a colour string. `Color.set("#rrggbb")` runs a
 // full hex parse on every call, and these were previously assigned once per light per frame.
@@ -110,6 +122,8 @@ export class GameRenderer {
    * the render loop.
    */
   private frameMsWindow = new Float32Array(FPS_WINDOW);
+  /** Reused sort buffer for `medianFrameMs`, so measuring the frame rate allocates nothing. */
+  private frameMsScratch = new Float32Array(FPS_WINDOW);
   private frameMsWrite = 0;
   private frameMsFilled = 0;
   /** Seconds left before auto-scaler samples count again; see `applyPixelRatio`. */
@@ -475,11 +489,30 @@ export class GameRenderer {
     this.dprCooldown = DPR_CHANGE_COOLDOWN_S;
   }
 
-  /** Median of the frame-time window. 0 until the window has filled at least once. */
+  /**
+   * Median of the frame-time window. 0 until the window has filled at least once.
+   *
+   * Sorts into a reused scratch buffer rather than `Array.from(...).sort()`. This runs on
+   * every rendered frame, and allocating a fresh array sixty times a second to measure
+   * whether the frame rate is healthy is its own small contribution to the problem.
+   */
   private medianFrameMs(): number {
-    if (this.frameMsFilled === 0) return 0;
-    const sorted = Array.from(this.frameMsWindow.subarray(0, this.frameMsFilled)).sort((a, b) => a - b);
-    return sorted[Math.floor(sorted.length / 2)];
+    const n = this.frameMsFilled;
+    if (n === 0) return 0;
+    const scratch = this.frameMsScratch;
+    for (let i = 0; i < n; i++) scratch[i] = this.frameMsWindow[i];
+    // Insertion sort: n is FPS_WINDOW at most, where this beats a comparator-based sort and
+    // allocates nothing at all.
+    for (let i = 1; i < n; i++) {
+      const v = scratch[i];
+      let j = i - 1;
+      while (j >= 0 && scratch[j] > v) {
+        scratch[j + 1] = scratch[j];
+        j--;
+      }
+      scratch[j + 1] = v;
+    }
+    return scratch[n >> 1];
   }
 
   /** The unscaled ratio for the current tier and canvas size. */
@@ -728,7 +761,10 @@ export class GameRenderer {
         // corner, and the player feels all of it before anything is done. Scaling UP stays
         // reluctant at 10 s, because raising resolution is what caused the stall in the
         // first place and oscillating between the two is worse than either.
-        if (this.lowFpsTimer > 1.2) {
+        // Deeply short of target is not a transient: act on it in a third of a second
+        // rather than sitting through the full sustain window while the player feels it.
+        const sustain = currentFps < URGENT_FPS ? URGENT_SUSTAIN_S : 1.2;
+        if (this.lowFpsTimer > sustain) {
           this.currentDprScale = Math.max(0.6, this.currentDprScale - 0.15);
           this.applyPixelRatio(baseDpr * this.currentDprScale);
           this.lowFpsTimer = 0;

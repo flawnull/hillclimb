@@ -363,11 +363,18 @@ export function buildInstancedVegetation(
    * instanced draws to 110 for barely three thousand extra triangles, which is the wrong
    * trade in exactly the direction the chunking note below warns about.
    *
-   * At 720 m the same clumps collapse into far fewer, fuller draws. Culling gets coarser, but
-   * a scrub clump is twenty triangles: drawing a few that are off screen is much cheaper than
-   * issuing the calls to avoid them — the same reasoning that put TERRAIN_CHUNK_M at 800.
+   * 720 m was tried and is too far the other way. It collapsed them into fuller draws, but a
+   * chunk that wide gets a bounding sphere to match: measured at a 546 m cull radius against
+   * roughly 160 m for every other species, which is large enough to intersect the frustum
+   * from almost anywhere. The chunks were no longer being rejected at all, so every clump on
+   * the stage was submitted every frame however the camera was pointed — trading a handful of
+   * draw calls for permanently drawing the lot, which is the trade the note below warns
+   * against, made in the opposite direction.
+   *
+   * 360 m keeps most of the batching win while bringing the cull radius back into the range
+   * where the culler can actually reject a chunk.
    */
-  const SCRUB_CHUNK_M = 720;
+  const SCRUB_CHUNK_M = 360;
 
   const perSpecies: Record<string, { geo: THREE.BufferGeometry; mat: THREE.Material }> = {
     "veg-pine": { geo: pineGeo, mat: pineMat },
