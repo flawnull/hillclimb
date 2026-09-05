@@ -54,7 +54,36 @@ export class KeyboardController {
     this.onPauseCallback = cb;
   }
 
+  /**
+   * COMMAND SWALLOWS keyup ON macOS, WHICH IS HOW THE BRAKE STUCK ON.
+   *
+   * While either Command key is held, macOS does not deliver `keyup` for ordinary keys — the
+   * events simply never arrive. So a driver holding S (brake) who presses Command for
+   * anything at all, releases S, then releases Command, leaves `keys['KeyS']` true with no
+   * event left that could ever clear it. `getAxes` merges the sources with `Math.max`, so a
+   * latched keyboard brake cannot be overridden by releasing the on-screen pedal either: the
+   * car simply will not go.
+   *
+   * `blur` already covers Command chords that switch app or tab, which is why this recovered
+   * "after a while" rather than never — but a chord that keeps focus here (Command tapped on
+   * its own, Command+S, a shortcut the page ignores) leaves it stuck with nothing to reset it
+   * short of pressing the same key again.
+   *
+   * Two rules close it. A key pressed as part of a Command chord is not registered at all,
+   * because its release will never be reported; and when Command itself comes up, everything
+   * held is dropped, because any release during the chord was swallowed and cannot be
+   * recovered. Command's own keyup IS delivered, so that last rule always gets its chance to
+   * run.
+   */
+  private static isMeta(code: string): boolean {
+    return code === 'MetaLeft' || code === 'MetaRight';
+  }
+
   private handleKeyDown = (e: KeyboardEvent): void => {
+    // Part of a Command chord: its keyup will never arrive, so never record it as held.
+    // This also stops Command+R (reload) doubling as the game's restart shortcut.
+    if (e.metaKey && !KeyboardController.isMeta(e.code)) return;
+
     this.keys[e.code] = true;
     if (e.code === 'KeyR' && this.onRestartCallback) {
       this.onRestartCallback();
@@ -65,6 +94,12 @@ export class KeyboardController {
   };
 
   private handleKeyUp = (e: KeyboardEvent): void => {
+    if (KeyboardController.isMeta(e.code)) {
+      // Anything released during the chord reported nothing. Drop the lot rather than trust
+      // a map that is now known to be stale.
+      this.keys = {};
+      return;
+    }
     this.keys[e.code] = false;
   };
 
