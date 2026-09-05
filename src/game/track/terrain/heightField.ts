@@ -269,18 +269,30 @@ export function createHeightField(spline: TrackSpline): HeightField {
     // --- Macro variation ---------------------------------------------------------------
     // Every band above is a single flat tone spread over hundreds of metres, which is what
     // makes the ground read as painted cardboard however much relief it has: real hillsides
-    // are patchy with grass, scrub, bare earth and shadowed hollows. Two overlapping
-    // low-frequency waves (roughly 60 m and 23 m) shift the tone by a few percent, biased
-    // green-to-brown rather than just light-to-dark so it reads as varied ground cover
-    // rather than uneven lighting. Deterministic in world position, so it is stable across
-    // rebuilds and identical on every client.
+    // are patchy with grass, scrub, bare earth and shadowed hollows. Overlapping
+    // low-frequency waves shift the tone, biased green-to-brown rather than just
+    // light-to-dark so it reads as varied ground cover rather than uneven lighting.
+    // Deterministic in world position, so it is stable across rebuilds and identical on
+    // every client.
+    //
+    // THREE WAVES, NOT TWO, AND HARDER. The two here had wavelengths of 333 m and 115 m —
+    // measured from the wavevector magnitudes, not the 60 m and 23 m an earlier comment
+    // claimed — at an amplitude of 0.055, a shift of about five percent. Across a whole
+    // facing hillside a kilometre away, 333 m is small enough to average out and five
+    // percent is below what survives the haze, so the far slopes arrived as one flat green
+    // mass whatever the near ground did. The third wave is ~730 m, which is the scale of a
+    // whole flank rather than a field, and the amplitude is up enough for the patches to
+    // still be there after fog: the point is that a distant hillside should read as
+    // woodland in some places and pasture in others, which is most of what stops it looking
+    // like painted card.
     const patch =
       Math.sin(worldX * 0.0165 + worldZ * 0.0091) * 0.5 +
-      Math.sin(worldX * 0.0427 - worldZ * 0.0338 + 2.1) * 0.3;
-    const tint = patch * 0.055;
-    r += tint * 1.15;
-    g += tint * 0.85;
-    b += tint * 0.5;
+      Math.sin(worldX * 0.0427 - worldZ * 0.0338 + 2.1) * 0.3 +
+      Math.sin(worldX * 0.0068 - worldZ * 0.0053 + 0.7) * 0.55;
+    const tint = patch * 0.075;
+    r += tint * 1.25;
+    g += tint * 0.80;
+    b += tint * 0.40;
 
     // --- Bedding planes on steep faces ---------------------------------------------------
     //

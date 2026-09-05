@@ -189,9 +189,12 @@ export function buildInstancedVegetation(
     "veg-rock": 0,
     "veg-scrub": 0,
   };
-  // Separate, much lower cap than the roadside species: this is background texture spread
-  // over a far wider band, not a hedge that needs individually convincing trees.
+  // Separate, much lower caps than the roadside species: this is background texture spread
+  // over a far wider band, not a hedge that needs individually convincing trees. The far
+  // band gets its own budget on top so that filling the near band can never starve it —
+  // they cover different ground and one is not a substitute for the other.
   const scrubCount = Math.min(280, Math.floor(samples.length * 0.5));
+  const farScrubCount = Math.min(300, Math.floor(samples.length * 0.55));
 
   for (let i = 2; i < samples.length - 2; i += 3) {
     const s = samples[i];
@@ -271,41 +274,48 @@ export function buildInstancedVegetation(
       }
     }
 
-    // Background scrub: one roll per station (not per-k — this is sparse filler, not a
-    // hedge), placed well beyond the roadside trees' ~60-76 m reach. Own rng stream so it
-    // never perturbs the roadside placements above regardless of station index.
+    // Background scrub, in two bands. One roll each per station (not per-k — this is sparse
+    // filler, not a hedge), placed well beyond the roadside trees' ~60-76 m reach. Own rng
+    // stream so it never perturbs the roadside placements above regardless of station index.
+    //
+    // The NEAR band alone left everything past ~225 m bare, and the hillsides a player
+    // actually looks at across a valley are further out than that: they arrived as one flat
+    // green mass with a fringe of planting along the road and nothing beyond it. The FAR
+    // band reaches 600 m with fewer, much larger clumps — at that range an individual bush
+    // is sub-pixel and worthless, while a copse-sized blob is what reads as woodland on a
+    // far slope. Bigger and rarer is strictly better value per triangle out there.
     const scrubRnd = rngFrom(i * 2654435761 + 99991);
-    if (scrubRnd() < 0.18 && emitted["veg-scrub"] < scrubCount) {
-      const side = scrubRnd() < 0.5 ? -1 : 1;
-      const dist = 65.0 + scrubRnd() * 160.0; // 65-225 m out
-      const posX = s.x + s.normalX * dist * side + (scrubRnd() - 0.5) * 30.0;
-      const pz = s.z + s.normalZ * dist * side + (scrubRnd() - 0.5) * 30.0;
 
-      // Reject anything that actually lands on or near ANY part of the road (this offset is
-      // large enough that on a switchback stage it can land close to a different leg of the
-      // route entirely, not just this station's own corridor).
+    const placeScrub = (dist: number, jitter: number, minScale: number, scaleRange: number): void => {
+      const side = scrubRnd() < 0.5 ? -1 : 1;
+      const posX = s.x + s.normalX * dist * side + (scrubRnd() - 0.5) * jitter;
+      const pz = s.z + s.normalZ * dist * side + (scrubRnd() - 0.5) * jitter;
+
+      // Reject anything that actually lands on or near ANY part of the road (these offsets
+      // are large enough that on a switchback stage they can land close to a different leg
+      // of the route entirely, not just this station's own corridor).
       const proj = spline.projectFrenet(posX, pz);
-      if (Math.abs(proj.t) <= proj.sample.halfWidth + 4.0) {
-        // skip silently: this station just doesn't get a scrub clump this pass
-      } else {
-        let insideBuilding = false;
-        for (const b of buildings) {
-          if (Math.hypot(b.x - posX, b.z - pz) < b.r + 3.0) {
-            insideBuilding = true;
-            break;
-          }
-        }
-        if (!insideBuilding) {
-          const posY = field.heightAt(posX, pz) - 0.2;
-          const scale = 1.3 + scrubRnd() * 1.7;
-          dummy.position.set(posX, posY, pz);
-          dummy.scale.set(scale, scale * (0.6 + scrubRnd() * 0.35), scale);
-          dummy.rotation.y = scrubRnd() * Math.PI * 2;
-          dummy.updateMatrix();
-          emitted["veg-scrub"]++;
-          emit("veg-scrub", posX, pz);
-        }
+      if (Math.abs(proj.t) <= proj.sample.halfWidth + 4.0) return;
+
+      for (const b of buildings) {
+        if (Math.hypot(b.x - posX, b.z - pz) < b.r + 3.0) return;
       }
+
+      const posY = field.heightAt(posX, pz) - 0.2;
+      const scale = minScale + scrubRnd() * scaleRange;
+      dummy.position.set(posX, posY, pz);
+      dummy.scale.set(scale, scale * (0.6 + scrubRnd() * 0.35), scale);
+      dummy.rotation.y = scrubRnd() * Math.PI * 2;
+      dummy.updateMatrix();
+      emitted["veg-scrub"]++;
+      emit("veg-scrub", posX, pz);
+    };
+
+    if (scrubRnd() < 0.18 && emitted["veg-scrub"] < scrubCount) {
+      placeScrub(65.0 + scrubRnd() * 160.0, 30.0, 1.3, 1.7); // 65-225 m
+    }
+    if (scrubRnd() < 0.30 && emitted["veg-scrub"] < scrubCount + farScrubCount) {
+      placeScrub(230.0 + scrubRnd() * 370.0, 90.0, 3.2, 4.0); // 230-600 m, copse-sized
     }
   }
 
@@ -333,6 +343,23 @@ export function buildInstancedVegetation(
   // draw calls as there are cells genuinely on screen.
   const CHUNK_M = 240;
 
+  /**
+   * Background scrub buckets on a much coarser grid than the roadside species.
+   *
+   * Chunking exists to give the frustum culler something to reject, and 240 m is right for
+   * planting that hugs the road: those cells are dense, so each draw call carries real work.
+   * Scrub is the opposite — it is spread thinly across a band up to 600 m to either side, so
+   * on a 240 m grid the outer cells hold one or two clumps each and every one of them still
+   * costs a draw call. Widening the band that way took the vegetation group from 84 separate
+   * instanced draws to 110 for barely three thousand extra triangles, which is the wrong
+   * trade in exactly the direction the chunking note below warns about.
+   *
+   * At 720 m the same clumps collapse into far fewer, fuller draws. Culling gets coarser, but
+   * a scrub clump is twenty triangles: drawing a few that are off screen is much cheaper than
+   * issuing the calls to avoid them — the same reasoning that put TERRAIN_CHUNK_M at 800.
+   */
+  const SCRUB_CHUNK_M = 720;
+
   const perSpecies: Record<string, { geo: THREE.BufferGeometry; mat: THREE.Material }> = {
     "veg-pine": { geo: pineGeo, mat: pineMat },
     "veg-cypress": { geo: cypGeo, mat: cypMat },
@@ -344,7 +371,8 @@ export function buildInstancedVegetation(
 
   const buckets = new Map<string, Placement[]>();
   for (const pl of placements) {
-    const key = `${pl.species}|${Math.floor(pl.x / CHUNK_M)}|${Math.floor(pl.z / CHUNK_M)}`;
+    const cell = pl.species === "veg-scrub" ? SCRUB_CHUNK_M : CHUNK_M;
+    const key = `${pl.species}|${Math.floor(pl.x / cell)}|${Math.floor(pl.z / cell)}`;
     const list = buckets.get(key);
     if (list) list.push(pl);
     else buckets.set(key, [pl]);
