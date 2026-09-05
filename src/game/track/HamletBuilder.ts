@@ -231,14 +231,27 @@ function makeBuilding(kind: Kind, rnd: () => number, wallColor: string, roofColo
   g.add(plinth, body, roof);
 
   // --- Openings ---------------------------------------------------------------------
-  // Windows on the entrance facade only. A barn gets none, a chapel gets one tall one.
+  //
+  // OPENINGS ARE QUADS, AND THEY GO ON EVERY WALL.
+  //
+  // Both halves of that are one change. Windows, shutters and doors used to be BoxGeometry —
+  // twelve triangles each — sitting five centimetres proud of a flat wall, so five of the six
+  // faces were buried and paid for on every opening of every building. As a quad each one is
+  // two triangles and looks identical from outside.
+  //
+  // What that buys is the thing actually worth fixing: openings used to go on the entrance
+  // facade ONLY, so a building seen from its side or back — which, on a road that passes a
+  // hamlet rather than aiming at it, is most of them — was a blank untextured box. Spending
+  // the saved triangles on the other three walls costs less than the boxes did and is the
+  // difference between a village and a row of cartons.
   const faceZ = -(dim.d / 2 + 0.05);
   if (kind === "cappella") {
     const win = new THREE.Mesh(
-      new THREE.BoxGeometry(0.6, 1.5, 0.06),
+      new THREE.PlaneGeometry(0.6, 1.5),
       new THREE.MeshStandardMaterial({ color: "#2b2f36", roughness: 0.35 })
     );
     win.position.set(0, dim.h - 1.3, faceZ);
+    win.rotation.y = Math.PI;
     // Bell gable: a slab above the ridge with the opening cut as a dark inset.
     const gable = new THREE.Mesh(
       new THREE.BoxGeometry(1.5, 1.7, 0.35),
@@ -247,34 +260,61 @@ function makeBuilding(kind: Kind, rnd: () => number, wallColor: string, roofColo
     gable.position.set(0, dim.h + dim.pitch + 0.5, faceZ + 0.3);
     gable.castShadow = true;
     const bell = new THREE.Mesh(
-      new THREE.BoxGeometry(0.55, 0.7, 0.12),
+      new THREE.PlaneGeometry(0.55, 0.7),
       new THREE.MeshStandardMaterial({ color: "#2b2f36", roughness: 0.4 })
     );
     bell.position.set(0, dim.h + dim.pitch + 0.6, faceZ + 0.15);
+    bell.rotation.y = Math.PI;
     g.add(win, gable, bell);
   } else if (kind !== "stalla" && kind !== "rustico") {
-    const winGeo = new THREE.BoxGeometry(0.72, 1.05, 0.06);
+    const winGeo = new THREE.PlaneGeometry(0.72, 1.05);
     const winMat = new THREE.MeshStandardMaterial({ color: "#f6f5f1", roughness: 0.35 });
-    const shutGeo = new THREE.BoxGeometry(0.36, 1.05, 0.07);
+    const shutGeo = new THREE.PlaneGeometry(0.36, 1.05);
     const shutMat = new THREE.MeshStandardMaterial({ color: shutterColor, roughness: 0.75 });
 
-    const columns = dim.w > 7 ? 3 : 2;
-    const spacing = (dim.w - 1.8) / (columns - 1);
-    for (let c = 0; c < columns; c++) {
-      const wx = -(dim.w - 1.8) / 2 + c * spacing;
-      for (let row = 0; row < dim.storeys; row++) {
-        const wy = 2.2 + row * 2.9;
-        if (wy > dim.h - 0.6) continue;
-        // Not every opening is a window; a blank patch of wall is what stops a facade
-        // reading as a spreadsheet.
-        if (rnd() < 0.15) continue;
-        const win = new THREE.Mesh(winGeo, winMat);
-        win.position.set(wx, wy, faceZ);
-        const sl = new THREE.Mesh(shutGeo, shutMat);
-        sl.position.set(wx - 0.44, wy, faceZ + 0.02);
-        const sr = new THREE.Mesh(shutGeo, shutMat);
-        sr.position.set(wx + 0.44, wy, faceZ + 0.02);
-        g.add(win, sl, sr);
+    /**
+     * One wall, described by the yaw that turns a +Z-facing quad outward and by where a
+     * point at lateral offset `u` and height `y` on that wall sits in the building's frame.
+     *
+     * The yaw is the part to get right: PlaneGeometry faces +Z, the materials here are
+     * FrontSide, and a panel wound into the wall is invisible from outside rather than
+     * merely wrong — the same failure that lost the road deck and the terrain LOD skirts.
+     * `span` is the width available for a window grid on that wall.
+     */
+    const facades: { yaw: number; at: (u: number, y: number, out: number) => [number, number, number]; span: number; skip: number }[] = [
+      // Entrance facade, densest.
+      { yaw: Math.PI, at: (u, y, out) => [u, y, -(dim.d / 2 + out)], span: dim.w, skip: 0.15 },
+      // Gable ends, sparser: these face along the road more often than not.
+      { yaw: Math.PI / 2, at: (u, y, out) => [dim.w / 2 + out, y, u], span: dim.d, skip: 0.35 },
+      { yaw: -Math.PI / 2, at: (u, y, out) => [-(dim.w / 2 + out), y, u], span: dim.d, skip: 0.35 },
+      // Back wall, sparsest — usually into the hillside, but never blank.
+      { yaw: 0, at: (u, y, out) => [u, y, dim.d / 2 + out], span: dim.w, skip: 0.5 },
+    ];
+
+    for (const f of facades) {
+      const usable = f.span - 1.8;
+      if (usable < 0.4) continue;
+      const columns = f.span > 7 ? 3 : f.span > 4.6 ? 2 : 1;
+      const spacing = columns > 1 ? usable / (columns - 1) : 0;
+      for (let c = 0; c < columns; c++) {
+        const u = columns > 1 ? -usable / 2 + c * spacing : 0;
+        for (let row = 0; row < dim.storeys; row++) {
+          const wy = 2.2 + row * 2.9;
+          if (wy > dim.h - 0.6) continue;
+          // Not every opening is a window; a blank patch of wall is what stops a facade
+          // reading as a spreadsheet.
+          if (rnd() < f.skip) continue;
+          const win = new THREE.Mesh(winGeo, winMat);
+          win.position.set(...f.at(u, wy, 0.05));
+          win.rotation.y = f.yaw;
+          const sl = new THREE.Mesh(shutGeo, shutMat);
+          sl.position.set(...f.at(u - 0.44, wy, 0.07));
+          sl.rotation.y = f.yaw;
+          const sr = new THREE.Mesh(shutGeo, shutMat);
+          sr.position.set(...f.at(u + 0.44, wy, 0.07));
+          sr.rotation.y = f.yaw;
+          g.add(win, sl, sr);
+        }
       }
     }
   }
@@ -283,10 +323,11 @@ function makeBuilding(kind: Kind, rnd: () => number, wallColor: string, roofColo
   const doorW = kind === "stalla" ? 2.6 : 1.05;
   const doorH = kind === "stalla" ? 3.0 : 2.1;
   const door = new THREE.Mesh(
-    new THREE.BoxGeometry(doorW, doorH, 0.08),
+    new THREE.PlaneGeometry(doorW, doorH),
     new THREE.MeshStandardMaterial({ color: "#46301b", roughness: 0.85 })
   );
   door.position.set(0, doorH / 2 + 0.3, faceZ);
+  door.rotation.y = Math.PI;
   g.add(door);
 
   if (kind === "casa" || kind === "casaLarga" || kind === "torre") {
