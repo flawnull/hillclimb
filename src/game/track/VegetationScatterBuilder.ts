@@ -160,7 +160,13 @@ export function buildInstancedVegetation(
   // from the road, not survive close inspection, so it skips the trunk/tiered-canopy pieces
   // the real species above spend triangles on.
   const scrubGeo = new THREE.IcosahedronGeometry(1.7, 0);
-  const scrubMat = new THREE.MeshStandardMaterial({ color: "#3f6b2f", roughness: 0.9, flatShading: true });
+  // SMOOTH-SHADED, unlike the boulders. Twenty flat faces lit individually read as a cut
+  // crystal, and the far band scales these up several times over, so each facet arrives
+  // metres across and the clumps looked like green rocks rather than foliage. Shading the
+  // same twenty triangles smoothly rounds the silhouette for nothing — no extra geometry,
+  // no extra draw call. The colour is dropped and desaturated a little too, so a hillside of
+  // them reads as woodland rather than as a row of bright blobs.
+  const scrubMat = new THREE.MeshStandardMaterial({ color: "#3a5c30", roughness: 0.92 });
 
   const dummy = new THREE.Object3D();
 
@@ -315,7 +321,10 @@ export function buildInstancedVegetation(
       placeScrub(65.0 + scrubRnd() * 160.0, 30.0, 1.3, 1.7); // 65-225 m
     }
     if (scrubRnd() < 0.30 && emitted["veg-scrub"] < scrubCount + farScrubCount) {
-      placeScrub(230.0 + scrubRnd() * 370.0, 90.0, 3.2, 4.0); // 230-600 m, copse-sized
+      // 230-600 m. Copse-sized, but not boulder-sized: at the old 3.2-7.2 range the largest
+      // were 24 m across, wider than any real stand of trees here and big enough that the
+      // twenty-face silhouette gave itself away however it was shaded.
+      placeScrub(230.0 + scrubRnd() * 370.0, 90.0, 2.4, 2.1);
     }
   }
 
