@@ -206,7 +206,15 @@ export class Engine {
       return this.renderState;
     }
 
-    const clampedDelta = Math.min(frameDeltaSeconds, 0.25);
+    // Clamped at BOTH ends. The upper bound stops a long stall from being simulated in one
+    // go; the lower bound of zero is what keeps `alpha` inside [0, 1), where it means
+    // interpolation. A negative delta (see the timebase note in GameRenderer.start) drives
+    // the accumulator below zero, which both stalls stepping until real time pays the
+    // deficit back and sends `alpha` negative, so getInterpolatedState EXTRAPOLATES the car
+    // backwards down its own velocity instead of interpolating between two real states.
+    // Guarded here as well as at the caller because the accumulator invariant — never
+    // negative, so alpha stays in [0, 1) — belongs to this loop, not to whoever drives it.
+    const clampedDelta = Math.min(Math.max(frameDeltaSeconds, 0), 0.25);
     this.accumulator += clampedDelta;
 
     const inputAxes = this.input.getAxes();

@@ -24,6 +24,18 @@ import { EffectsManager } from "./EffectsManager";
 // generation bug. 6000 m comfortably covers the padded field with headroom to spare.
 const CAMERA_FAR = 6000;
 
+/**
+ * Frames the quality auto-scaler averages over, and how long it stays deaf after acting.
+ *
+ * 45 frames is about three quarters of a second at 60 Hz — long enough that the handful of
+ * first-draw buffer uploads in any given stretch of road cannot drag the median, short
+ * enough that a device which genuinely cannot hold the frame rate is recognised promptly.
+ * The cooldown covers the reallocation `setPixelRatio` performs plus the frames either side
+ * of it, so the change is never counted as evidence for the next one.
+ */
+const FPS_WINDOW = 45;
+const DPR_CHANGE_COOLDOWN_S = 1.0;
+
 // Hoisted so the render loop never parses a colour string. `Color.set("#rrggbb")` runs a
 // full hex parse on every call, and these were previously assigned once per light per frame.
 const BRAKE_LIGHT_ON = new THREE.Color("#ff0000");
@@ -91,6 +103,17 @@ export class GameRenderer {
   private highFpsTimer = 0;
   private currentDprScale = 1.0;
   private qualityTier: QualityTier = "high";
+  /**
+   * Ring buffer of recent frame times, milliseconds. The auto-scaler judges on the MEDIAN of
+   * this rather than on the newest frame, so an individual hitch — a chunk's first buffer
+   * upload, a GC pause — cannot be mistaken for a slow device. See the auto-scaler block in
+   * the render loop.
+   */
+  private frameMsWindow = new Float32Array(FPS_WINDOW);
+  private frameMsWrite = 0;
+  private frameMsFilled = 0;
+  /** Seconds left before auto-scaler samples count again; see `applyPixelRatio`. */
+  private dprCooldown = 0;
 
   // Latched light states, so the render loop only writes materials on an actual change.
   private lastBrakingState: boolean | null = null;
@@ -435,6 +458,30 @@ export class GameRenderer {
     this.renderer.shadowMap.enabled = tier !== "low";
   }
 
+  /**
+   * Changes the pixel ratio and blinds the auto-scaler for a moment afterwards.
+   *
+   * `setPixelRatio` reallocates the drawing buffer, which costs a stalled frame or two. Left
+   * to itself the controller measures that stall, concludes the device is struggling and
+   * steps down again — the remedy proving its own necessity, which is what ratcheted the
+   * scale to its 0.6 floor within a few seconds of every run. Discarding the window and
+   * sitting out DPR_CHANGE_COOLDOWN_S breaks that loop: the next decision is made only on
+   * frames drawn at the new resolution.
+   */
+  private applyPixelRatio(ratio: number): void {
+    this.renderer.setPixelRatio(ratio);
+    this.frameMsFilled = 0;
+    this.frameMsWrite = 0;
+    this.dprCooldown = DPR_CHANGE_COOLDOWN_S;
+  }
+
+  /** Median of the frame-time window. 0 until the window has filled at least once. */
+  private medianFrameMs(): number {
+    if (this.frameMsFilled === 0) return 0;
+    const sorted = Array.from(this.frameMsWindow.subarray(0, this.frameMsFilled)).sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+
   /** The unscaled ratio for the current tier and canvas size. */
   private targetPixelRatio(): number {
     return pixelRatioFor(
@@ -472,9 +519,37 @@ export class GameRenderer {
 
   public start(engine: Engine, onStateUpdate?: (s: EngineRenderState) => void): void {
     this.stop();
-    this.lastTime = performance.now();
+    // SEEDED FROM THE FIRST rAF TIMESTAMP, NOT performance.now().
+    //
+    // These are the same epoch but not the same instant: rAF hands the callback the time the
+    // FRAME BEGAN, while performance.now() reads the clock right now, part-way through the
+    // frame's script. Seeding from the latter and subtracting it from the former makes the
+    // first delta `frameStart - somewhereInsideThatFrame`, which is negative whenever the
+    // calling script ran longer than a vsync — and `start()` is called straight out of the
+    // terrain build, so it always does. Measured on the dev server: the first delta handed
+    // to Engine.update was -0.0499 s.
+    //
+    // That is not cosmetic. Engine.update adds the delta to its fixed-step accumulator, so a
+    // negative one drives the accumulator below zero: no physics step runs until real time
+    // pays the deficit back (~50 ms of frozen car), and `alpha`, the accumulator divided by
+    // the step, goes to about -3. getInterpolatedState extrapolates on that alpha, so the car
+    // is DRAWN roughly three steps behind where it actually is — at speed, over a metre
+    // backwards — and then snaps forward once stepping resumes. A freeze plus a lurch
+    // backwards plus a recovery, which is exactly what "it goes back as if something loaded,
+    // then normal drive" looks like.
+    //
+    // -1 means unseeded; the first frame then measures zero elapsed instead of a negative.
+    this.lastTime = -1;
+
+    // The frames right after the track is built are all first-draw buffer uploads, which say
+    // nothing about what the device can sustain. Start the auto-scaler's window empty and
+    // hold it off for a beat so those do not decide the resolution for the whole session.
+    this.frameMsFilled = 0;
+    this.frameMsWrite = 0;
+    this.dprCooldown = DPR_CHANGE_COOLDOWN_S;
 
     const renderLoop = (time: number) => {
+      if (this.lastTime < 0) this.lastTime = time;
       const deltaSeconds = Math.min((time - this.lastTime) / 1000, 0.1);
       this.lastTime = time;
 
@@ -606,9 +681,47 @@ export class GameRenderer {
       // first place: more pixels means more GPU work, so re-raising it the moment FPS
       // recovers risks immediately re-triggering the downscale and oscillating between
       // the two. Being reluctant to scale up avoids that thrash.
-      const currentFps = 1.0 / (deltaSeconds || 0.016);
+      // MEASURED OVER A WINDOW, AND DEAF FOR A MOMENT AFTER IT ACTS.
+      //
+      // The controller used to judge on ONE frame: `1 / deltaSeconds`. Two things follow
+      // from that, and both were visible in the first seconds of a run.
+      //
+      // First, the opening seconds are exactly when frame times are transiently bad for
+      // reasons that have nothing to do with the device's capability: three.js uploads each
+      // chunk's buffers the first time it is actually drawn, so every new stretch of terrain
+      // and vegetation entering the frustum costs an upload. Single-frame sampling counts
+      // each of those hitches as evidence of a slow GPU.
+      //
+      // Second, and worse, `setPixelRatio` REALLOCATES THE DRAWING BUFFER — the change is
+      // itself a stalled frame. That stall was measured on the very next frame and fed
+      // straight back into the timer that triggers the next downscale, so the remedy kept
+      // proving its own necessity. Instrumented on the dev server, the scale ratcheted
+      // 1.0 -> 0.85 -> 0.70 -> 0.60 in three steps and parked on the floor, each step a
+      // buffer reallocation the player feels as a stutter — a burst of them a few seconds
+      // into the run, then quiet once the floor is reached and there is nothing left to
+      // step down to.
+      //
+      // So: judge on the MEDIAN of a window of recent frames, which a handful of upload
+      // hitches cannot move but a genuinely slow device sits squarely on top of; ignore
+      // samples for a beat after any change, so the reallocation is never its own evidence;
+      // and ignore the first stretch after the loop starts, which is all upload cost. None
+      // of this stops a weak device downscaling — it only requires that the slowness outlast
+      // the transients.
+      this.frameMsWindow[this.frameMsWrite] = deltaSeconds * 1000;
+      this.frameMsWrite = (this.frameMsWrite + 1) % FPS_WINDOW;
+      if (this.frameMsFilled < FPS_WINDOW) this.frameMsFilled++;
+      if (this.dprCooldown > 0) this.dprCooldown -= deltaSeconds;
+
       const baseDpr = this.targetPixelRatio();
-      if (currentFps < 54 && this.currentDprScale > 0.6) {
+      // Median frame time over the window, or Infinity fps while still filling it / cooling
+      // down, which lands in neither branch and leaves both timers untouched.
+      const medianMs = this.medianFrameMs();
+      const currentFps = medianMs > 0 ? 1000 / medianMs : Infinity;
+      // Until the window has filled and any cooldown has run out, neither timer moves at
+      // all: an unsettled reading is not evidence in either direction.
+      const settled = this.frameMsFilled >= FPS_WINDOW && this.dprCooldown <= 0;
+
+      if (settled && currentFps < 54 && this.currentDprScale > 0.6) {
         this.lowFpsTimer += deltaSeconds;
         this.highFpsTimer = 0;
         // 2.5 s was too patient: two and a half seconds of dropped frames is most of a
@@ -617,16 +730,16 @@ export class GameRenderer {
         // first place and oscillating between the two is worse than either.
         if (this.lowFpsTimer > 1.2) {
           this.currentDprScale = Math.max(0.6, this.currentDprScale - 0.15);
-          this.renderer.setPixelRatio(baseDpr * this.currentDprScale);
+          this.applyPixelRatio(baseDpr * this.currentDprScale);
           this.lowFpsTimer = 0;
         }
-      } else if (currentFps > 58) {
+      } else if (settled && currentFps > 58) {
         this.lowFpsTimer = Math.max(0, this.lowFpsTimer - deltaSeconds);
         if (this.currentDprScale < 1.0) {
           this.highFpsTimer += deltaSeconds;
           if (this.highFpsTimer > 10.0) {
             this.currentDprScale = Math.min(1.0, this.currentDprScale + 0.15);
-            this.renderer.setPixelRatio(baseDpr * this.currentDprScale);
+            this.applyPixelRatio(baseDpr * this.currentDprScale);
             this.highFpsTimer = 0;
           }
         } else {

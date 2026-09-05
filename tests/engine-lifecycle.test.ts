@@ -215,6 +215,50 @@ describe("Engine Lifecycle & State Machine", () => {
     );
   });
 
+  it("a negative frame delta never rewinds the rendered car", () => {
+    // GameRenderer seeded its frame clock from performance.now() and then differenced it
+    // against the requestAnimationFrame timestamp, which is the frame's START time. Called
+    // out of the terrain build — script work far longer than one vsync — the first delta
+    // came out negative; measured on the dev server at -0.0499 s. Fed to update() that drove
+    // the fixed-step accumulator below zero, so no physics ran until real time repaid the
+    // deficit AND `alpha` went to about -3, which makes getInterpolatedState extrapolate the
+    // car backwards down its own velocity instead of interpolating. A freeze, a lurch
+    // backwards, then a snap forward once stepping resumed.
+    const engine = new Engine("weiss-blau-30");
+    const spline = new TrackSpline(stageDef);
+    engine.setSpline(spline);
+    engine.startRun();
+
+    // Get the car genuinely moving, so a rewind would have distance to show up over.
+    engine.input.setTouchAxes({ steer: 0, throttle: 1, brake: 0, handbrake: false });
+    for (let i = 0; i < 120; i++) engine.update(PHYSICS_DT);
+    assert.ok(engine.vehicle.state.speedMs > 3, "car should be moving before the probe");
+
+    const before = engine.update(0);
+    const movedBefore = { x: before.pos.x, z: before.pos.z };
+
+    // The frame that used to rewind everything.
+    const after = engine.update(-0.05);
+
+    const jump = Math.hypot(after.pos.x - movedBefore.x, after.pos.z - movedBefore.z);
+    assert.ok(
+      jump < 0.05,
+      `a negative delta moved the rendered car ${jump.toFixed(3)} m — it must be ignored, not ` +
+        `extrapolated backwards`
+    );
+
+    // And the accumulator must still be able to step immediately: a negative delta that is
+    // merely clamped at the render layer but banked here would stall stepping until the
+    // deficit was repaid.
+    const posBeforeStep = { x: engine.vehicle.state.pos.x, z: engine.vehicle.state.pos.z };
+    engine.update(PHYSICS_DT);
+    const stepped = Math.hypot(
+      engine.vehicle.state.pos.x - posBeforeStep.x,
+      engine.vehicle.state.pos.z - posBeforeStep.z
+    );
+    assert.ok(stepped > 0, "physics must step on the very next frame, not sit out a deficit");
+  });
+
   it("triggers onFinish callback exactly once with accurate non-zero finish time and valid splits", () => {
     const engine = new Engine("weiss-blau-30");
     const spline = new TrackSpline(stageDef);
