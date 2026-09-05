@@ -111,8 +111,16 @@ describe("Vegetation scatter is a population, not one number repeated", () => {
 
     it(`${stageId}: both verges are scattered over a comparable range of distances`, () => {
       const { placements } = WORLDS.get(stageId)!;
-      const left = placements.filter((p) => p.t < 0).map((p) => p.offEdge);
-      const right = placements.filter((p) => p.t > 0).map((p) => p.offEdge);
+      // "veg-scrub" is a deliberate second population: sparse background filler placed
+      // 65-225 m out to break up the bald mid-distance fields, an order of magnitude
+      // further than the roadside hedge species this test protects. Its own side/distance
+      // independence is covered by the "no species lives entirely on one side" test above;
+      // mixing its much larger distances into this aggregate mean would fail on nothing
+      // more than an ordinary random left/right count difference in that population, not on
+      // the side draw dictating its distance draw.
+      const roadside = placements.filter((p) => p.species !== "veg-scrub");
+      const left = roadside.filter((p) => p.t < 0).map((p) => p.offEdge);
+      const right = roadside.filter((p) => p.t > 0).map((p) => p.offEdge);
       assert.ok(left.length > 40 && right.length > 40, `${stageId}: too few placements to judge`);
 
       const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;

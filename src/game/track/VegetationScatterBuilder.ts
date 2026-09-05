@@ -153,6 +153,15 @@ export function buildInstancedVegetation(
   const rockGeo = new THREE.DodecahedronGeometry(2.2, 0);
   const rockMat = new THREE.MeshStandardMaterial({ color: "#94a3b8", roughness: 0.92, flatShading: true });
 
+  // 6. Background scrub — a single trunk-less low-poly blob (an icosahedron, 20 faces) for
+  // the mid-distance fields and hillsides beyond where the roadside trees above reach (they
+  // stop at ~60-76 m out; see the `maxTreeDist` cutoff below). Past that the terrain was bare
+  // green with nothing breaking it up. This only needs to read as scattered brush at a glance
+  // from the road, not survive close inspection, so it skips the trunk/tiered-canopy pieces
+  // the real species above spend triangles on.
+  const scrubGeo = new THREE.IcosahedronGeometry(1.7, 0);
+  const scrubMat = new THREE.MeshStandardMaterial({ color: "#3f6b2f", roughness: 0.9, flatShading: true });
+
   const dummy = new THREE.Object3D();
 
   /**
@@ -178,7 +187,11 @@ export function buildInstancedVegetation(
     "veg-olive": 0,
     "veg-chestnut": 0,
     "veg-rock": 0,
+    "veg-scrub": 0,
   };
+  // Separate, much lower cap than the roadside species: this is background texture spread
+  // over a far wider band, not a hedge that needs individually convincing trees.
+  const scrubCount = Math.min(280, Math.floor(samples.length * 0.5));
 
   for (let i = 2; i < samples.length - 2; i += 3) {
     const s = samples[i];
@@ -257,6 +270,43 @@ export function buildInstancedVegetation(
         emit("veg-chestnut", posX, pz);
       }
     }
+
+    // Background scrub: one roll per station (not per-k — this is sparse filler, not a
+    // hedge), placed well beyond the roadside trees' ~60-76 m reach. Own rng stream so it
+    // never perturbs the roadside placements above regardless of station index.
+    const scrubRnd = rngFrom(i * 2654435761 + 99991);
+    if (scrubRnd() < 0.18 && emitted["veg-scrub"] < scrubCount) {
+      const side = scrubRnd() < 0.5 ? -1 : 1;
+      const dist = 65.0 + scrubRnd() * 160.0; // 65-225 m out
+      const posX = s.x + s.normalX * dist * side + (scrubRnd() - 0.5) * 30.0;
+      const pz = s.z + s.normalZ * dist * side + (scrubRnd() - 0.5) * 30.0;
+
+      // Reject anything that actually lands on or near ANY part of the road (this offset is
+      // large enough that on a switchback stage it can land close to a different leg of the
+      // route entirely, not just this station's own corridor).
+      const proj = spline.projectFrenet(posX, pz);
+      if (Math.abs(proj.t) <= proj.sample.halfWidth + 4.0) {
+        // skip silently: this station just doesn't get a scrub clump this pass
+      } else {
+        let insideBuilding = false;
+        for (const b of buildings) {
+          if (Math.hypot(b.x - posX, b.z - pz) < b.r + 3.0) {
+            insideBuilding = true;
+            break;
+          }
+        }
+        if (!insideBuilding) {
+          const posY = field.heightAt(posX, pz) - 0.2;
+          const scale = 1.3 + scrubRnd() * 1.7;
+          dummy.position.set(posX, posY, pz);
+          dummy.scale.set(scale, scale * (0.6 + scrubRnd() * 0.35), scale);
+          dummy.rotation.y = scrubRnd() * Math.PI * 2;
+          dummy.updateMatrix();
+          emitted["veg-scrub"]++;
+          emit("veg-scrub", posX, pz);
+        }
+      }
+    }
   }
 
   // --- Spatial chunking -----------------------------------------------------------------
@@ -289,6 +339,7 @@ export function buildInstancedVegetation(
     "veg-olive": { geo: oliveGeo, mat: oliveMat },
     "veg-chestnut": { geo: chestnutGeo, mat: chestnutMat },
     "veg-rock": { geo: rockGeo, mat: rockMat },
+    "veg-scrub": { geo: scrubGeo, mat: scrubMat },
   };
 
   const buckets = new Map<string, Placement[]>();
@@ -308,7 +359,9 @@ export function buildInstancedVegetation(
     // Named by species, not by cell: tests and any future per-species logic group on this,
     // and which cell an instance landed in is an implementation detail of the culler.
     mesh.name = species;
-    mesh.castShadow = species !== "veg-rock";
+    // Background filler doesn't need to cast shadows: it's far enough out that a missing
+    // shadow is invisible, and skipping it halves the shadow-pass draw calls this adds.
+    mesh.castShadow = species !== "veg-rock" && species !== "veg-scrub";
     // Instance matrices are baked at build time and never move, so the bounding volume the
     // culler needs can be computed once. Without this three.js falls back to the geometry's
     // own sphere, which ignores the instance offsets entirely and would cull cells wrongly.
