@@ -57,7 +57,7 @@ const URGENT_SUSTAIN_S = 0.35;
 // full hex parse on every call, and these were previously assigned once per light per frame.
 const BRAKE_LIGHT_ON = new THREE.Color("#ff0000");
 const BRAKE_LIGHT_OFF = new THREE.Color("#7f1d1d");
-const BRAKE_EMISSIVE_ON = new THREE.Color("#ff1a1a");
+const BRAKE_EMISSIVE_ON = new THREE.Color("#ff0404");
 const BRAKE_EMISSIVE_OFF = new THREE.Color("#450a0a");
 const DISC_HOT = new THREE.Color("#ea580c");
 const DISC_COLD = new THREE.Color("#475569");
@@ -673,7 +673,22 @@ export class GameRenderer {
             if (mat) {
               mat.color.copy(isBraking ? BRAKE_LIGHT_ON : BRAKE_LIGHT_OFF);
               mat.emissive.copy(isBraking ? BRAKE_EMISSIVE_ON : BRAKE_EMISSIVE_OFF);
-              mat.emissiveIntensity = isBraking ? 3.0 : 0.6;
+              // ACES SEES THESE NOW, WHICH `toneMapped: false` NO LONGER PREVENTS.
+              //
+              // three turns off a material's own tone mapping whenever it renders into a
+              // target, and the composer puts one in the way — so the lamps arrive at
+              // OutputPass raw and get ACES applied there like everything else. ACES pushes a
+              // very bright saturated red towards orange and then white, so at 3.0 the lens
+              // was a white hole rather than a red light.
+              //
+              // That sets up a tension with the bloom threshold, which the lamp has to CLEAR
+              // to glow at all: brighter blooms harder but turns orange, and the threshold
+              // cannot simply come down to meet it — at 0.85 the sunlit white bodywork of the
+              // Weiss-Blau starts blooming along its roof rails and deck, which is worse than
+              // an orange lamp. So the threshold stays above the bodywork at 1.15 and the lamp
+              // sits just over it, with the hue pulled back by a purer red emissive instead of
+              // by dimming.
+              mat.emissiveIntensity = isBraking ? 1.55 : 0.6;
             }
           }
         }
@@ -685,10 +700,13 @@ export class GameRenderer {
         // why there is no bloom post-pass — see CarMeshBuilder.
         for (const glow of this.carMeshResult.brakeGlowMeshes) {
           const mat = glow.material as THREE.MeshBasicMaterial;
-          // Half what it was: the bloom pass now supplies most of the halo on the high tier,
-          // and the two together blew the lamps out to white. The quad still carries it on
-          // its own where bloom is off, which is every tier below high.
-          const target = isBraking ? 0.38 : 0.0;
+          // THE QUAD AND THE BLOOM PASS ARE ALTERNATIVES, NOT LAYERS.
+          //
+          // The quad is a 0.6 m additive disc centred on each lamp. Over blue paint that is a
+          // soft purple blob sitting on the rear quarters — which, next to a bloom halo doing
+          // the same job, read as the bodywork having gone translucent. Where bloom is running
+          // it needs only a faint core; where it is not, the quad is the whole effect.
+          const target = isBraking ? (this.composer ? 0.1 : 0.55) : 0.0;
           if (mat.opacity !== target) {
             mat.opacity += (target - mat.opacity) * Math.min(1, deltaSeconds * 18);
             if (Math.abs(target - mat.opacity) < 0.004) mat.opacity = target;
@@ -880,16 +898,21 @@ export class GameRenderer {
       // white bodywork lands near 1.0, so the cut sits above that and only the lamps — whose
       // emissive runs to 3.0 — actually pass it. Strength and radius are deliberately modest;
       // this is meant to make the brake lights radiate, not to fog the screen.
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.45, 0.4, 1.15);
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.30, 0.22, 1.15);
       this.composer.addPass(this.bloomPass);
       // Applies tone mapping and the output colour space, which the materials no longer do
       // for themselves once there is a render target in the way.
       this.composer.addPass(new OutputPass());
     }
 
+    // `EffectComposer.setSize` already forwards `width * pixelRatio` to every pass, so DO NOT
+    // call `bloomPass.setSize` afterwards: passing the CSS size again overwrites the scaled
+    // one, and the pass then runs at half resolution on a 2x display. Its blur kernel is
+    // measured in pass pixels, so halving the resolution DOUBLES the halo in screen terms —
+    // which on a Retina screen turned the brake lights into a purple wash across the whole
+    // rear of the car, bright enough to read as though the bodywork had gone transparent.
     this.composer.setPixelRatio(this.renderer.getPixelRatio());
     this.composer.setSize(width, height);
-    this.bloomPass?.setSize(width, height);
   }
 
   private renderFrame(): void {
