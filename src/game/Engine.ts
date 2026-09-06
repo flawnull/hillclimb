@@ -6,7 +6,7 @@
 
 import { VehicleModel, GroundQuery, Vec3 } from "./vehicle/VehicleModel";
 import { InputManager, InputAxes } from "./input/InputManager";
-import { TrackSpline, SplineSample } from "./track/TrackSpline";
+import { TrackSpline, SplineSample, FrenetProjection } from "./track/TrackSpline";
 import { Timer, RunState, SplitRecord, PenaltyEvent } from "./timing/Timer";
 import { ReplayRecorder } from "./timing/ReplayRecorder";
 import { EngineAudio } from "./audio/EngineAudio";
@@ -311,13 +311,12 @@ export class Engine {
    * Deliberately unscored. This is the edge of the map, not a rock face: a player who backs
    * off the grid should be stopped, not billed.
    */
-  private applyStageBounds(): void {
-    if (!this.spline) return;
-    const p = this.spline.projectFrenet(this.vehicle.state.pos.x, this.vehicle.state.pos.z, this.cachedS);
+  private applyStageBounds(p: FrenetProjection): boolean {
+    if (!this.spline) return false;
     const overBehind = -p.sUnclamped;
     const overPast = p.sUnclamped - this.spline.totalLength;
     const overshoot = Math.max(overBehind, overPast);
-    if (overshoot <= STAGE_APRON_M) return;
+    if (overshoot <= STAGE_APRON_M) return false;
 
     const end = p.sample;
     const tanLen = Math.hypot(end.tangentX, end.tangentZ) || 1;
@@ -327,6 +326,7 @@ export class Engine {
     const tz = (end.tangentZ / tanLen) * inward;
     const push = overshoot - STAGE_APRON_M;
     this.vehicle.applyWallCollision(tx, tz, tx * push, tz * push, false);
+    return true;
   }
 
   private stepPhysics(dt: number, inputAxes: InputAxes, enableAssist: boolean): void {
@@ -344,7 +344,15 @@ export class Engine {
 
     // Before anything else: the car must be inside the world in every state where it can
     // still move, which includes the post-finish coast below.
-    this.applyStageBounds();
+    //
+    // ONE PROJECTION PER STEP, SHARED. `projectFrenet` walks the sample list, and with no
+    // usable cache (cachedS is 0 on the start line) that walk is the whole stage — thousands
+    // of samples. Giving the bounds check its own call doubled that on every physics step for
+    // a value the boundary code below was about to compute anyway.
+    const stepProj = this.spline
+      ? this.spline.projectFrenet(this.vehicle.state.pos.x, this.vehicle.state.pos.z, this.cachedS)
+      : null;
+    const boundsMovedCar = stepProj ? this.applyStageBounds(stepProj) : false;
 
     // AFTER THE FINISH the car rolls to a halt rather than being abandoned mid-stride.
     //
@@ -396,8 +404,13 @@ export class Engine {
 
     let projSample: SplineSample | undefined;
 
-    if (this.spline) {
-      const proj = this.spline.projectFrenet(this.vehicle.state.pos.x, this.vehicle.state.pos.z, this.cachedS);
+    if (this.spline && stepProj) {
+      // `applyStageBounds` only moves the car in the rare case that it left the map, so the
+      // shared projection is still accurate on every ordinary step; re-derive only when it is
+      // not.
+      const proj = boundsMovedCar
+        ? this.spline.projectFrenet(this.vehicle.state.pos.x, this.vehicle.state.pos.z, this.cachedS)
+        : stepProj;
       this.cachedS = proj.s;
       projSample = proj.sample;
 

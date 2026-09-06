@@ -59,6 +59,18 @@ const BRAKE_LIGHT_ON = new THREE.Color("#ff0000");
 const BRAKE_LIGHT_OFF = new THREE.Color("#7f1d1d");
 const BRAKE_EMISSIVE_ON = new THREE.Color("#ff0404");
 const BRAKE_EMISSIVE_OFF = new THREE.Color("#450a0a");
+/**
+ * How long the frame rate has to hold up at native resolution before the bloom pass is
+ * allowed on, and how long it is locked out again after any downscale.
+ *
+ * Gating bloom on `currentDprScale >= 1` alone is a feedback loop: bloom costs frames, the
+ * scaler drops resolution, that switches bloom off, the frames come back, the scaler climbs
+ * to native, bloom returns, and it all happens again. The player feels the cycle, not the
+ * effect. A lockout makes the decision stick, and starting locked out means a device only
+ * ever gets bloom after it has demonstrated it can afford it.
+ */
+const BLOOM_LOCKOUT_S = 12;
+
 const DISC_HOT = new THREE.Color("#ea580c");
 const DISC_COLD = new THREE.Color("#475569");
 
@@ -121,6 +133,8 @@ export class GameRenderer {
   private currentDprScale = 1.0;
   private composer: EffectComposer | null = null;
   private bloomPass: UnrealBloomPass | null = null;
+  /** Seconds of sustained full-resolution running still owed before bloom may come back. */
+  private bloomLockoutS = BLOOM_LOCKOUT_S;
   private qualityTier: QualityTier = "high";
   /**
    * Ring buffer of recent frame times, milliseconds. The auto-scaler judges on the MEDIAN of
@@ -815,6 +829,12 @@ export class GameRenderer {
       this.frameMsWrite = (this.frameMsWrite + 1) % FPS_WINDOW;
       if (this.frameMsFilled < FPS_WINDOW) this.frameMsFilled++;
       if (this.dprCooldown > 0) this.dprCooldown -= deltaSeconds;
+      // Only counts down while the device is actually holding native resolution, so the clock
+      // measures demonstrated headroom rather than elapsed time.
+      if (this.bloomLockoutS > 0 && this.currentDprScale >= 0.999) {
+        this.bloomLockoutS -= deltaSeconds;
+        if (this.bloomLockoutS <= 0) this.syncComposer();
+      }
 
       const baseDpr = this.targetPixelRatio();
       // Median frame time over the window, or Infinity fps while still filling it / cooling
@@ -837,6 +857,9 @@ export class GameRenderer {
         const sustain = currentFps < URGENT_FPS ? URGENT_SUSTAIN_S : 1.2;
         if (this.lowFpsTimer > sustain) {
           this.currentDprScale = Math.max(0.6, this.currentDprScale - 0.15);
+          // Any downscale is this device telling us it has no headroom. Lock bloom out for a
+          // stretch rather than letting it return the moment the resolution recovers.
+          this.bloomLockoutS = BLOOM_LOCKOUT_S;
           this.applyPixelRatio(baseDpr * this.currentDprScale);
           this.lowFpsTimer = 0;
         }
@@ -872,7 +895,7 @@ export class GameRenderer {
    * milliseconds on a halo. That check is what keeps this from undoing the frame budget.
    */
   private bloomWanted(): boolean {
-    return this.qualityTier === "high" && this.currentDprScale >= 0.999;
+    return this.qualityTier === "high" && this.currentDprScale >= 0.999 && this.bloomLockoutS <= 0;
   }
 
   /** Builds or tears down the post chain to match `bloomWanted()`, and keeps it sized. */

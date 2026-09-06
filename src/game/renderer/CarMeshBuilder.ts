@@ -563,49 +563,71 @@ export class CarMeshBuilder {
     const glassMesh = new THREE.Mesh(glassGeo, glassMat);
     chassisGroup.add(glassMesh);
 
-    // A dark cabin behind the glass.
+    // AN INTERIOR LINER, NOT A BOX IN THE MIDDLE.
     //
-    // The greenhouse is a shell with nothing inside it, so the windscreen and the backlight
-    // line up and the player sees the road THROUGH the car — which no amount of tinting fixes,
-    // because tint darkens what is behind the glass and what is behind the glass was more
-    // road. One matte box between the two screens is what glass needs to read as glass: it
-    // gives the tint something to sit over and the reflections something to beat.
+    // The greenhouse is a shell with nothing inside it, so the player sees the road THROUGH
+    // the car — and, from behind, the far wheel through the far window. No amount of tinting
+    // fixes that: tint darkens what is behind the glass, and what was behind the glass was
+    // more scenery.
     //
-    // Kept between the two middle sections, where the roof is at full height. Extending it
-    // forward under the windscreen would push it through a roofline that is still rising.
-    const cabinFrontZ = sections[3].z;
-    const cabinRearZ = sections[4].z;
-    // Held clear of the roofline. Flush with it, the box's sun-lit top face lines up with the
-    // backlight and is what you see through the rear window — a bright slab where an interior
-    // should be. Dropped below, the screens look onto its unlit faces instead.
-    const cabinTop = Math.min(sections[3].yTop, sections[4].yTop) - 0.07;
-    const cabinBase = sections[3].yBelt;
-    const cabinW = Math.min(sections[3].wTop, sections[4].wTop) - 0.05;
-    // UNLIT ON PURPOSE. A lit box has a top face, and the sun finds it through the backlight:
-    // however dark the colour, a horizontal surface in full sun comes back as mid-grey and
-    // reads as a slab sitting where the interior should be. A car interior is in shadow at all
-    // times, so `MeshBasicMaterial` is not a shortcut here — it is the correct response to the
-    // light. It still takes fog, so it recedes with the rest of the car.
-    const cabinMat = new THREE.MeshBasicMaterial({ color: "#0c0f13" });
-    const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(cabinW, cabinTop - cabinBase, Math.abs(cabinFrontZ - cabinRearZ)),
-      cabinMat
-    );
-    cabin.position.set(0, (cabinTop + cabinBase) / 2, (cabinFrontZ + cabinRearZ) / 2);
-    chassisGroup.add(cabin);
+    // A single box between the two middle sections does not fix it either, which is what was
+    // here before. The glazed run is sections 2 to 5 — windscreen, both side windows and the
+    // backlight — and a box that spans only 3 to 4 leaves the ends of that run open. Sight
+    // lines enter through the front of one side window and leave through the front of the
+    // other, which is exactly the "you can see the wheels from the inside" case.
+    //
+    // So the liner follows the section table across the whole glazed span, inset a couple of
+    // centimetres, with its roof tracking the real roofline as it rises and falls. It is one
+    // closed shell: nothing can look past it in any direction.
+    //
+    // UNLIT ON PURPOSE. A lit box has a top face and the sun finds it through the backlight;
+    // however dark the colour, a horizontal surface in full sun returns mid-grey and reads as
+    // a slab where an interior should be. A car interior is in shadow at all times, so
+    // `MeshBasicMaterial` is the correct response to the light here, not a shortcut. It still
+    // takes fog, so it recedes with the rest of the car.
+    const LINER_FIRST = 2;
+    const LINER_LAST = Math.min(5, sections.length - 2);
+    const linerMat = new THREE.MeshBasicMaterial({ color: "#0c0f13", side: THREE.DoubleSide });
+    {
+      const pos: number[] = [];
+      const idx: number[] = [];
+      const quad = (a: Pt3, b: Pt3, c: Pt3, d: Pt3) => {
+        const base = pos.length / 3;
+        pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
+        idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      };
+      // Four corners of the liner's cross-section at one section, ordered around the ring.
+      const ringAt = (k: number): Pt3[] => {
+        const sec = sections[k];
+        const hw = Math.max(0.05, sec.wTop / 2 - 0.025);
+        const lo = sec.yBelt - 0.02;
+        const hi = Math.max(lo + 0.04, sec.yTop - 0.025);
+        return [
+          { x: -hw, y: lo, z: sec.z },
+          { x: hw, y: lo, z: sec.z },
+          { x: hw, y: hi, z: sec.z },
+          { x: -hw, y: hi, z: sec.z },
+        ];
+      };
 
-    // Two seat backs standing proud of it. A single box behind tinted glass is a flat wall
-    // wherever the light hits it; a couple of shapes at different depths give the parallax
-    // that makes a cabin look occupied without modelling an interior anyone can resolve.
-    const seatGeo = new THREE.BoxGeometry(cabinW * 0.34, (cabinTop - cabinBase) * 0.85, 0.10);
-    for (const side of [-1, 1]) {
-      const seat = new THREE.Mesh(seatGeo, cabinMat);
-      seat.position.set(
-        side * cabinW * 0.24,
-        (cabinTop + cabinBase) / 2 + 0.03,
-        (cabinFrontZ + cabinRearZ) / 2 + 0.06
-      );
-      chassisGroup.add(seat);
+      for (let k = LINER_FIRST; k < LINER_LAST; k++) {
+        const a = ringAt(k);
+        const b = ringAt(k + 1);
+        for (let i = 0; i < 4; i++) {
+          const j = (i + 1) % 4;
+          quad(a[i], b[i], b[j], a[j]);
+        }
+      }
+      // Close both ends, or the shell is a tube and you can see straight down it.
+      const front = ringAt(LINER_FIRST);
+      const back = ringAt(LINER_LAST);
+      quad(front[0], front[1], front[2], front[3]);
+      quad(back[0], back[1], back[2], back[3]);
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setIndex(idx);
+      chassisGroup.add(new THREE.Mesh(geo, linerMat));
     }
 
     const frontZ = sections[0].z;
