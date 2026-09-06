@@ -32,6 +32,33 @@ function driveStep(v: VehicleModel, throttle = 1) {
 }
 
 describe("Wall contact", () => {
+  it("is solid, and free, before the run has started", () => {
+    // The wall clamp and the off-road respawn were both gated on `timer.state === 'running'`.
+    // On the start line — and again after the finish — that left the corridor with no edges
+    // at all: the car could be driven straight off it and out past the terrain, where there
+    // is nothing but the underside of the ground and a black void. Containment is not a
+    // scoring rule; only the penalty is.
+    const v = new VehicleModel("weiss-blau-30");
+    v.reset({ x: 0, y: 560, z: 0 }, 0, 560);
+
+    // Not scoring: the wall must still move the car back and must still bleed its speed...
+    v.state.vel.x = 12;
+    const charged = v.applyWallCollision(-1, 0, 0.5, 0, false);
+
+    assert.equal(charged, false, "a pre-start scrape must not charge a penalty");
+    assert.equal(v.state.cleanRun, true, "a pre-start scrape must not spoil the clean-run flag");
+    assert.equal(v.state.pos.x, 0.5, "the wall must push the car back whether or not it is scoring");
+    assert.ok(v.state.vel.x < 12, "the wall must still bleed speed");
+
+    // ...and it must not have spent the cooldown, or a bump before the lights would buy a
+    // free contact during the run.
+    assert.equal(
+      v.applyWallCollision(-1, 0, 0, 0),
+      true,
+      "the first scoring contact must still charge after a pre-start scrape"
+    );
+  });
+
   it("charges a penalty on entering contact, not on every step held against it", () => {
     const v = new VehicleModel("weiss-blau-30");
     v.reset({ x: 0, y: 560, z: 0 }, 0, 560);

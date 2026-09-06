@@ -165,6 +165,71 @@ describe("Car model", () => {
     }
   });
 
+  it("nothing on the tail panel hangs outside the bodywork", () => {
+    // Four body styles share one builder and their tails are not alike. The lamp cluster was
+    // authored as constants — a 1.50 x 0.15 housing at y = 0.44 — which overhung the coupe's
+    // tail by 3.6 cm and the van's by 4.1 cm, and on the mid-engined car, whose tail panel
+    // stops at y = 0.46, put the top third of the housing at a height where the bodywork has
+    // no material at all. Straight on it hid behind the car; under roll it swung clear of the
+    // silhouette and read as a bite taken out of the rear quarter.
+    //
+    // Measured against the real shell rather than against the numbers that produced it: cast
+    // a ray outward along x from the centreline at the part's own height and depth, and take
+    // the furthest hit as the half-width of the body there. No hit means no bodywork at all.
+    for (const v of ALL_VARIANTS) {
+      const result = CarMeshBuilder.buildCarModel(CAR_DEFS[v.id], v.colorIndex);
+
+      result.carGroup.updateMatrixWorld(true);
+
+      // The shell geometry is authored in chassis-local space and the chassis is lifted onto
+      // its suspension, so put both into world space before comparing them.
+      const shell = new THREE.Group();
+      const opaque = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+      for (const src of [result.chassisMesh, result.glassMesh]) {
+        const m = new THREE.Mesh(src.geometry, opaque);
+        m.applyMatrix4(src.matrixWorld);
+        shell.add(m);
+      }
+      shell.updateMatrixWorld(true);
+
+      const shellBox = new THREE.Box3().setFromObject(shell);
+      // Just INSIDE the closing cap. The lamps deliberately stand proud of the tail, so
+      // sampling at their own depth asks about a place the bodywork does not reach and every
+      // part looks like an overhang. The question is whether they fit the panel they sit on.
+      const z = shellBox.min.z + 0.01;
+
+      const ray = new THREE.Raycaster();
+      const offenders: string[] = [];
+
+      for (const part of result.tailPanelMeshes) {
+        part.geometry.computeBoundingBox();
+        const box = part.geometry.boundingBox!.clone().applyMatrix4(part.matrixWorld);
+        for (const y of [box.min.y, (box.min.y + box.max.y) / 2, box.max.y]) {
+          for (const dir of [-1, 1]) {
+            const reach = dir < 0 ? Math.abs(box.min.x) : box.max.x;
+            ray.set(new THREE.Vector3(0, y, z), new THREE.Vector3(dir, 0, 0));
+            const hits = ray.intersectObject(shell, true);
+            const bodyHalfWidth = hits.length ? hits[hits.length - 1].distance : 0;
+            if (reach > bodyHalfWidth + 1e-3) {
+              offenders.push(
+                `reaches ${reach.toFixed(3)} m at y=${y.toFixed(3)} where the body is ` +
+                  `${bodyHalfWidth.toFixed(3)} m`
+              );
+            }
+          }
+        }
+      }
+
+      assert.deepEqual(
+        offenders,
+        [],
+        `${v.id}/${v.colorIndex}: ${offenders.length} tail-panel overhang(s) — ` +
+          offenders.join("; ") +
+          `. Size the cluster from the rear section's profile, not from constants.`
+      );
+    }
+  });
+
   it("no car material requests a transmission pass", () => {
     // `transmission > 0` makes three render the whole opaque scene into a second render
     // target every frame so refracting surfaces have something to sample. The glass was

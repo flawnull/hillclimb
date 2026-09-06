@@ -540,17 +540,24 @@ export class VehicleModel {
    * an impulse but never actually stopped anything: the car carried on into the field
    * while the caller charged a penalty on every step it spent out there.
    *
+   * `scoring` separates being STOPPED by the wall from being BILLED for it. The wall has to
+   * be solid whether or not a run is under way — otherwise the car simply leaves the world
+   * while the player is sitting on the start line — but a scrape that happens before the
+   * timer starts must not spend the penalty cooldown or spoil the clean-run flag, or a bump
+   * against the wall before the lights would buy one free contact during it.
+   *
    * @returns true if the caller should charge a penalty — i.e. this is the START of a
-   *          contact, not a continuation of one already being billed.
+   *          contact, not a continuation of one already being billed, and it is scoring.
    */
   public applyWallCollision(
     normalX: number,
     normalZ: number,
     correctionX: number = 0,
-    correctionZ: number = 0
+    correctionZ: number = 0,
+    scoring: boolean = true
   ): boolean {
     const s = this.state;
-    s.cleanRun = false;
+    if (scoring) s.cleanRun = false;
 
     // Put the car back on the road edge. This is what makes the wall solid.
     s.pos.x += correctionX;
@@ -567,7 +574,7 @@ export class VehicleModel {
     s.vel.z += normalZ * impulse;
     s.yawRate *= -0.5;
 
-    if (s.wallPenaltyCooldown > 0) return false;
+    if (!scoring || s.wallPenaltyCooldown > 0) return false;
     s.wallPenaltyCooldown = WALL_PENALTY_COOLDOWN_STEPS;
     return true;
   }

@@ -17,6 +17,9 @@ export interface CarMeshResult {
   headlightGlowMeshes: THREE.Mesh[];
   /** Additive halos behind the tail lamps. Opacity is driven by the braking state. */
   brakeGlowMeshes: THREE.Mesh[];
+  /** Lamps, housing and plate mounted on the tail. Every one must sit within the bodywork —
+   *  see tests/car-model.test.ts. */
+  tailPanelMeshes: THREE.Mesh[];
   brakeDiscs: THREE.Mesh[];
   exhaustFlame: THREE.Mesh | null;
   perkGlowMesh: THREE.Mesh | null;
@@ -262,6 +265,7 @@ export class CarMeshBuilder {
     const headlightGlowMeshes: THREE.Mesh[] = [];
     const brakeGlowMeshes: THREE.Mesh[] = [];
     const brakeDiscs: THREE.Mesh[] = [];
+    const tailPanelMeshes: THREE.Mesh[] = [];
 
     const colorway = car.colorways[colorIndex] || car.colorways[0];
     const bodyStyle = colorway.bodyStyle || "coupe";
@@ -442,6 +446,24 @@ export class CarMeshBuilder {
         towards(top, roofCentre, BEVEL_M), // R_TOP_INNER
         roofCentre,                        // R_ROOF_CENTRE
       ];
+    };
+
+    /**
+     * Half-width of a section's profile at height `y`.
+     *
+     * Anything bolted to the nose or the tail has to fit the panel it sits on, and that panel
+     * is whatever the section table happens to say — it is not a constant. Returns 0 above the
+     * roofline or below the floor, where the cap has no material at all, so a caller that
+     * clamps against this cannot place a part in open air.
+     */
+    const halfWidthAt = (s: BodySection, y: number): number => {
+      if (y <= s.ySill || y >= s.yTop) return 0;
+      if (y <= s.yBelt) {
+        const t = (y - s.ySill) / Math.max(1e-6, s.yBelt - s.ySill);
+        return (s.wSill + (s.wBelt - s.wSill) * t) / 2;
+      }
+      const t = (y - s.yBelt) / Math.max(1e-6, s.yTop - s.yBelt);
+      return (s.wBelt + (s.wTop - s.wBelt) * t) / 2;
     };
 
     const rings: Pt2[][] = sections.map(halfRing);
@@ -719,32 +741,56 @@ export class CarMeshBuilder {
       }
     }
 
-    // 5. Rear lamps, set into a housing.
+    // 5. Rear lamps, set into a housing, SIZED FROM THE TAIL THEY ARE MOUNTED ON.
     //
     // A lens flush with the bumper skin reads as a sticker. The body shell is closed at
     // `rearZ`, so a true cavity would mean cutting the rear cap; instead the housing bezel
     // stands about a centimetre PROUDER than the lens it surrounds, which produces the same
     // shading cue — a dark rim with the lit surface sunk behind it.
-    const tlHousing = new THREE.Mesh(new THREE.BoxGeometry(1.50, 0.15, 0.055), seamMat);
-    tlHousing.position.set(0, 0.44, rearZ - 0.026);
+    //
+    // The dimensions cannot be constants. Four body styles share this code and their tails
+    // differ by a lot: a fixed 1.50 x 0.15 housing at y = 0.44 overhung the coupe's tail by
+    // 3.6 cm and the van's by 4.1 cm, and on the mid-engined car — whose tail panel stops at
+    // y = 0.46 — the top third of it sat at a height where the bodywork has no material at
+    // all, hanging in open air beside the car. Under roll it swings clear of the silhouette
+    // and reads as a bite taken out of the rear quarter.
+    const rearSection = sections[sections.length - 1];
+    const LAMP_CLEARANCE = 0.03;
+    const lampRadius = 0.09;
+    // Drop the band until a lamp of that radius clears the deck edge.
+    const lampY = Math.min(0.44, rearSection.yTop - lampRadius - 0.02);
+    // Measured at the band's full vertical extent, so the narrowest point still fits.
+    const lampHalfSpan =
+      Math.min(
+        halfWidthAt(rearSection, lampY - lampRadius),
+        halfWidthAt(rearSection, lampY + lampRadius)
+      ) - LAMP_CLEARANCE;
+    const lampOffsetX = Math.min(0.56, lampHalfSpan - lampRadius);
+
+    const tlHousing = new THREE.Mesh(
+      new THREE.BoxGeometry(lampHalfSpan * 2, 0.12, 0.055),
+      seamMat
+    );
+    tlHousing.position.set(0, lampY, rearZ - 0.026);
     chassisGroup.add(tlHousing);
 
-    const tlBarGeo = new THREE.BoxGeometry(1.42, 0.08, 0.035);
+    const tlBarGeo = new THREE.BoxGeometry(lampHalfSpan * 2 - 0.08, 0.07, 0.035);
     const tlMat = lampMat("#ef4444", "#7f1d1d", 1.0);
     tlMat.roughness = 0.2;
     const tlBar = new THREE.Mesh(tlBarGeo, tlMat);
-    tlBar.position.set(0, 0.44, rearZ - 0.022);
+    tlBar.position.set(0, lampY, rearZ - 0.022);
     chassisGroup.add(tlBar);
 
-    const tlRoundGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.035, 14);
+    const tlRoundGeo = new THREE.CylinderGeometry(lampRadius, lampRadius, 0.035, 14);
     const tlL = new THREE.Mesh(tlRoundGeo, tlMat);
     tlL.rotation.x = Math.PI / 2;
-    tlL.position.set(-0.56, 0.44, rearZ - 0.032);
+    tlL.position.set(-lampOffsetX, lampY, rearZ - 0.032);
     const tlR = new THREE.Mesh(tlRoundGeo, tlMat);
     tlR.rotation.x = Math.PI / 2;
-    tlR.position.set(0.56, 0.44, rearZ - 0.032);
+    tlR.position.set(lampOffsetX, lampY, rearZ - 0.032);
     chassisGroup.add(tlL, tlR);
     brakeLightMeshes.push(tlBar, tlL, tlR);
+    tailPanelMeshes.push(tlHousing, tlBar, tlL, tlR);
 
     // Additive halos around the lamps.
     //
@@ -755,7 +801,7 @@ export class CarMeshBuilder {
     // emitters that ever needed one.
     const glowTex = CarMeshBuilder.getRadialGlowTexture();
     const glowGeo = new THREE.PlaneGeometry(0.62, 0.42);
-    for (const offX of [-0.56, 0.56]) {
+    for (const offX of [-lampOffsetX, lampOffsetX]) {
       const glow = new THREE.Mesh(
         glowGeo,
         new THREE.MeshBasicMaterial({
@@ -769,7 +815,7 @@ export class CarMeshBuilder {
           toneMapped: false,
         })
       );
-      glow.position.set(offX, 0.44, rearZ - 0.075);
+      glow.position.set(offX, lampY, rearZ - 0.075);
       glow.renderOrder = 3;
       chassisGroup.add(glow);
       brakeGlowMeshes.push(glow);
@@ -780,15 +826,21 @@ export class CarMeshBuilder {
     revMat.roughness = 0.2;
     const revGeo = new THREE.BoxGeometry(0.12, 0.06, 0.03);
     const revL = new THREE.Mesh(revGeo, revMat);
-    revL.position.set(-0.28, 0.44, rearZ - 0.030);
+    revL.position.set(-0.28, lampY, rearZ - 0.030);
     const revR = new THREE.Mesh(revGeo, revMat);
-    revR.position.set(0.28, 0.44, rearZ - 0.030);
+    revR.position.set(0.28, lampY, rearZ - 0.030);
     chassisGroup.add(revL, revR);
     reverseLightMeshes.push(revL, revR);
+    tailPanelMeshes.push(revL, revR);
 
     // License Plate, sunk into a dark surround by the same bezel trick as the lamps.
+    // Sits under the lamp band and above the bumper's lower edge, wherever those land.
+    const plateY = Math.max(
+      rearSection.ySill + 0.09,
+      Math.min(0.28, lampY - lampRadius - 0.045)
+    );
     const plateRecess = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.17, 0.04), seamMat);
-    plateRecess.position.set(0, 0.28, rearZ - 0.018);
+    plateRecess.position.set(0, plateY, rearZ - 0.018);
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(0.44, 0.12),
       new THREE.MeshStandardMaterial({
@@ -798,8 +850,9 @@ export class CarMeshBuilder {
       })
     );
     plate.rotation.y = Math.PI;
-    plate.position.set(0, 0.28, rearZ - 0.039);
+    plate.position.set(0, plateY, rearZ - 0.039);
     chassisGroup.add(plateRecess, plate);
+    tailPanelMeshes.push(plateRecess, plate);
 
     // Exhausts.
     //
@@ -1078,6 +1131,7 @@ export class CarMeshBuilder {
       headlightGlowMeshes,
       brakeGlowMeshes,
       brakeDiscs,
+      tailPanelMeshes,
       exhaustFlame: flame,
       perkGlowMesh,
       spoilerGroup,

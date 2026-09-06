@@ -390,25 +390,37 @@ export class Engine {
         (isLeft && (proj.sample.exposure === 'left' || proj.sample.exposure === 'both')) ||
         (!isLeft && (proj.sample.exposure === 'right' || proj.sample.exposure === 'both'));
 
+      // THE BOUNDARY IS NOT PART OF THE SCORING RULES — it is what keeps the car in the world.
+      //
+      // Both branches below used to be gated on `timer.state === 'running'`, which meant that
+      // on the start line, and again after the finish, the road had no edges at all: the
+      // player could simply drive off the corridor and out past the terrain, where there is
+      // nothing to see but the underside of the ground and a black void. The gate belongs on
+      // the PENALTY, not on the containment.
+      const scoring = this.timer.state === 'running';
+
       if (isExposed && !proj.sample.guardrail) {
         // Drop Side: Off-Road Fall trigger
-        if (Math.abs(t) > hw + 1.2 && this.timer.state === 'running') {
-          // Perk: Pandino 4x4 Nonna's Nerve (+3s instead of +8s)
-          const penaltySec = this.vehicle.car.perk.id === "nonnas-nerve" ? 3.0 : 8.0;
-          this.lastPenalty = this.timer.addPenalty('offroad', penaltySec);
+        if (Math.abs(t) > hw + 1.2) {
+          if (scoring) {
+            // Perk: Pandino 4x4 Nonna's Nerve (+3s instead of +8s)
+            const penaltySec = this.vehicle.car.perk.id === "nonnas-nerve" ? 3.0 : 8.0;
+            this.lastPenalty = this.timer.addPenalty('offroad', penaltySec);
+            this.respawnCount++;
+          }
           this.audio.playWallScrape();
 
-          // Respawn at last checkpoint and sync cachedS
+          // Respawn at last checkpoint and sync cachedS. Before the run that checkpoint is
+          // the start line, so wandering off simply puts the car back on the grid.
           this.vehicle.reset(this.lastCheckpointPos, this.lastCheckpointHeading, ground.baseAltitude);
           this.cachedS = this.lastCheckpointS;
-          this.respawnCount++;
         }
       } else {
         // Wall Side or Guardrail: solid contact. The car is clamped back to the road
         // edge, and the penalty is charged once per contact (VehicleModel owns the
         // cooldown, so client and server agree without duplicating the rule).
         const wallLimit = hw + WALL_CONTACT_MARGIN;
-        if (Math.abs(t) > wallLimit && this.timer.state === 'running') {
+        if (Math.abs(t) > wallLimit) {
           const clampedT = (t > 0 ? 1 : -1) * wallLimit;
           const correctionX = proj.sample.normalX * (clampedT - t);
           const correctionZ = proj.sample.normalZ * (clampedT - t);
@@ -417,7 +429,8 @@ export class Engine {
             proj.sample.normalX * normalSign,
             proj.sample.normalZ * normalSign,
             correctionX,
-            correctionZ
+            correctionZ,
+            scoring
           );
           if (charged) {
             this.lastPenalty = this.timer.addPenalty('wall', 2.0);

@@ -194,25 +194,29 @@ export class GameRenderer {
     // old very-light slate) so the horizon closes seamlessly instead of showing a hard edge
     // where the terrain mesh ends and the flat background colour begins.
     //
-    // FogExp2 attenuates as F(d) = exp(-(d * density)^2), where F is the fraction of the
-    // fog colour mixed in (1 = fully fogged, 0 = clear). At CAMERA_FAR = 6000 the old
-    // density of 0.0021 (tuned for a 900 m world) gives F(900) = exp(-(900*0.0021)^2) =
-    // exp(-3.57) ≈ 0.028 — already almost opaque white by the old far plane, and completely
-    // opaque long before 6000 m, so the distant ridges would be fogged out solid rather than
-    // fading in as haze. We want the far ridges (4000-5000 m out) to sit at roughly
-    // F ≈ 0.05-0.10: visible through haze, not popping out of clear air and not vanishing
-    // into a wall of fog. Solving exp(-(d*density)^2) = 0.075 at the midpoint d = 4500:
-    //   (4500 * density)^2 = -ln(0.075) = 2.590
-    //   4500 * density = sqrt(2.590) = 1.609
-    //   density = 1.609 / 4500 ≈ 0.000358
-    // Rounding to density = 0.00035 and checking the endpoints of the 4000-5000 m band:
-    //   F(4000) = exp(-(4000*0.00035)^2) = exp(-1.96)  ≈ 0.141
-    //   F(4500) = exp(-(4500*0.00035)^2) = exp(-2.481) ≈ 0.084
-    //   F(5000) = exp(-(5000*0.00035)^2) = exp(-3.0625) ≈ 0.047
-    // which brackets the 0.05-0.10 target around the 4000-5000 m band the far ridges live in.
+    // THE FOG DENSITY WAS DERIVED FROM AN INVERTED FORMULA.
+    //
+    // three's FogExp2 shader is
+    //   fogFactor = 1 - exp(-(d * density)^2);  colour = mix(colour, fogColour, fogFactor)
+    // so exp(-(d*density)^2) is the fraction of the ORIGINAL colour RETAINED, and the fog
+    // mixed in is one minus that. The derivation this replaces called exp(-(d*density)^2)
+    // itself "the fraction of the fog colour mixed in (1 = fully fogged)" — which would mean
+    // the world is fully fogged at d = 0 — and then solved for 0.075 at 4500 m believing that
+    // was light haze. It is the opposite: at density 0.00035 the true fog fractions are
+    //   d=1000 -> 12%   d=2000 -> 39%   d=3000 -> 67%   d=4000 -> 86%   d=5000 -> 95%
+    // The far ridges, which is where most of the landscape's depth lives, were arriving 86-95%
+    // dissolved into flat haze — no form, no colour, nothing for the terrain's own variation
+    // to show through. That is most of what read as an unfinished horizon.
+    //
+    // Solving properly for the stated intent, light haze on the far ridges, at density
+    // 0.00022:
+    //   d=1000 -> 5%    d=2000 -> 18%   d=3000 -> 35%   d=4000 -> 54%   d=5000 -> 70%
+    // Aerial perspective still separates the distances, and the massif keeps its shape. The
+    // density cannot go much below this: the height field only extends FIELD_PADDING = 2500 m
+    // past the route, and fog at the field's outer edge is what hides the end of the world.
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color("#7891a8");
-    this.scene.fog = new THREE.FogExp2("#7891a8", 0.00035);
+    this.scene.fog = new THREE.FogExp2("#7891a8", 0.00022);
 
     const aspect = canvas.clientWidth / canvas.clientHeight || 16 / 9;
     // Near plane raised from 0.1 to 0.5: against a 6000 m far plane, 0.1 wastes almost all

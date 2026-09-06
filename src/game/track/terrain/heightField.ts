@@ -294,6 +294,48 @@ export function createHeightField(spline: TrackSpline): HeightField {
     g += tint * 0.80;
     b += tint * 0.40;
 
+    // --- Far-field woodland ---------------------------------------------------------------
+    //
+    // Past the scatter radius there is no vegetation AT ALL. VegetationScatterBuilder's
+    // outer band stops at 600 m, and beyond that every hillside is bare ground carrying
+    // nothing but the macro waves above — which is why the distant massif reads as smooth
+    // moulded plastic however much relief the field gives it. It is not a shape problem:
+    // sampled over the far field, the ground sits at 765-790 m median with the skyline near
+    // 1100 m, and at those altitudes in the Apennines green IS the right colour. What is
+    // missing is that a real slope at 800 m is a MOSAIC of woodland and open pasture, and at
+    // a kilometre it is the darkness of the woodland that carries, not its texture.
+    //
+    // So the mosaic is painted into the vertex colour instead of planted. It costs no
+    // geometry, which is the only budget the far field has — trees out there would be tens
+    // of thousands of triangles for something a few pixels across.
+    //
+    // Gated to start where the real scatter gives out, so nothing the player drives past
+    // changes: near the road the actual trees do this job. Suppressed on rock, which has no
+    // trees on it.
+    //
+    // THE WAVELENGTHS ARE SET BY THE LOD, NOT BY BOTANY. This is a per-VERTEX colour, and
+    // `leafSizeAt` grades the quadtree from 4 m at the road to 256 m at the horizon. Measured
+    // on Salita, the median edge length by distance from the route is
+    //     <300 m -> 5.7 m    300-800 -> 90 m    800-1500 -> 181 m    >1500 -> 256 m
+    // so out where this term is supposed to work the field is sampled every 256 m and nothing
+    // shorter than about 512 m can be represented AT ALL. A first cut at this used 280 / 157 /
+    // 67 m — stand-sized, and every one of them below Nyquist, so the far ridges came back
+    // exactly as smooth as before. These are 885 / 666 / 499 m: whole-flank scale, which is
+    // the finest thing the far field can actually carry. Anything finer has to come from the
+    // albedo texture or from more triangles, and triangles are what the far field cannot
+    // afford.
+    const standGate = smoothstep(420, 900, near.dist) * (1 - rockWeight);
+    const stand =
+      Math.sin(worldX * 0.0058 + worldZ * 0.0041 + 0.7) * 0.55 +
+      Math.sin(worldX * 0.0034 - worldZ * 0.0088 + 3.4) * 0.30 +
+      Math.sin(worldX * 0.0102 + worldZ * 0.0074 + 1.9) * 0.15;
+    // Only the upper part of the range becomes woodland; the rest stays open ground, so the
+    // result is patches with clearings between them rather than an even darkening.
+    const wood = smoothstep(-0.05, 0.62, stand) * standGate;
+    r = lerp(r, r * 0.52 + 0.018, wood);
+    g = lerp(g, g * 0.66 + 0.040, wood);
+    b = lerp(b, b * 0.52 + 0.014, wood);
+
     // --- Bedding planes on steep faces ---------------------------------------------------
     //
     // The terrain's UVs are a planar (x, z) projection — `uvs.push(x * 0.5, z * 0.5)` in
