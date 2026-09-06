@@ -621,15 +621,17 @@ export class GameRenderer {
       //
       // `s.pitch` and `s.roll` are how the car sits on the ROAD — camber, crown, the slope of
       // a climb — and the wheels follow those, because that is the surface they are standing
-      // on. `pitchDive` and `cornerRoll` are the BODY leaning on its suspension, and the
-      // wheels must not follow those at all.
+      // on. `s.bodyRoll`, `pitchDive` and `cornerRoll` are the BODY leaning on its suspension,
+      // and the wheels must not follow those at all.
       //
-      // Both used to be applied together to `carGroup`, which contains the wheels, so the
-      // whole car pivoted about the contact plane. Rolling by cornerRoll then drove the outer
-      // wheel down by halfTrack * sin(roll) — several centimetres straight into the asphalt,
-      // and worst exactly when the lean is largest, which is mid-drift. Putting the lean on
-      // the chassis alone leaves the wheels planted and makes the body lean over them, which
-      // is what suspension looks like.
+      // All of it used to be applied together to `carGroup`, which contains the wheels, so the
+      // whole car pivoted about the contact plane and the inside wheels went down by
+      // halfTrack * sin(roll). A first pass at this moved only `cornerRoll`, on the strength of
+      // a comment claiming `s.roll` was road attitude — it was not: Engine summed the road's
+      // bank and a `-yawRate * 0.04` body lean into that one number, and the lean was much the
+      // larger of the two. Measured with the wheels' actual vertices, the inside pair still sat
+      // 62-65 mm below the contact plane at full lock while the outside pair floated 25-53 mm
+      // above it. Engine now reports the two separately.
       const speedRatio = Math.min(1.0, s.speedMs / 55.0);
       const pitchDive = s.brake > 0.1 ? 0.035 * s.brake : s.throttle > 0.1 ? -0.022 * s.throttle : 0;
       const cornerRoll = -s.steer * speedRatio * 0.042;
@@ -637,7 +639,7 @@ export class GameRenderer {
       this.carGroup.position.set(s.pos.x, s.pos.y, s.pos.z);
       this.carGroup.rotation.set(s.pitch, s.heading, s.roll, "YXZ");
       if (this.carMeshResult) {
-        this.carMeshResult.chassisGroup.rotation.set(pitchDive, 0, cornerRoll);
+        this.carMeshResult.chassisGroup.rotation.set(pitchDive, 0, s.bodyRoll + cornerRoll);
       }
 
       // 3. Update Front Wheel Steering & Camber

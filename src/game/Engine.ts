@@ -22,7 +22,12 @@ export interface EngineRenderState {
   pos: Vec3;
   heading: number;
   pitch: number;
+  /** How the road is banked under the car. The wheels follow this: it is the surface they
+   *  are standing on. */
   roll: number;
+  /** How far the body leans on its suspension through a corner. The wheels must NOT follow
+   *  this — see GameRenderer's attitude update. */
+  bodyRoll: number;
   speedKmh: number;
   speedMs: number;
   rpm: number;
@@ -99,6 +104,7 @@ export class Engine {
     heading: 0,
     pitch: 0,
     roll: 0,
+    bodyRoll: 0,
     speedKmh: 0,
     speedMs: 0,
     rpm: 900,
@@ -235,15 +241,23 @@ export class Engine {
     const s = this.vehicle.state;
 
     // Track Spline Sampling for visuals
+    //
+    // ROAD ATTITUDE AND BODY LEAN ARE KEPT APART. They used to be summed into `roll`, which
+    // reads as one number but is two different things: the road's camber, which the WHEELS
+    // stand on and must follow, and the car leaning on its suspension as it corners, which
+    // they must not. Rotating the wheels by the second put the inside pair through the
+    // asphalt — measured at 62-65 mm below the contact plane at full lock, against a body
+    // lean of -yawRate * 0.04 and a half-track of about 0.8 m, which is exactly that product.
     let pitch = 0;
-    let roll = -s.yawRate * 0.04;
+    let roll = 0;
+    const bodyRoll = -s.yawRate * 0.04;
     let exposure: 'left' | 'right' | 'both' | 'none' = 'none';
     let dropDepth = 0;
 
     if (this.spline) {
       const proj = this.spline.projectFrenet(interpolated.pos.x, interpolated.pos.z, this.cachedS);
       pitch = proj.sample.pitch;
-      roll += proj.sample.bank;
+      roll = proj.sample.bank;
       exposure = proj.sample.exposure;
       dropDepth = proj.sample.dropDepth;
       interpolated.pos.y = proj.sample.y;
@@ -263,6 +277,7 @@ export class Engine {
     this.renderState.heading = interpolated.heading;
     this.renderState.pitch = pitch;
     this.renderState.roll = roll;
+    this.renderState.bodyRoll = bodyRoll;
     this.renderState.speedKmh = s.speedKmh;
     this.renderState.speedMs = s.speedMs;
     this.renderState.rpm = s.rpm;
