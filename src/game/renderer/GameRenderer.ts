@@ -13,11 +13,6 @@ import { createHeightField, type HeightField } from "../track/terrain/heightFiel
 import type { BuildingFootprint } from "../track/HamletBuilder";
 import { QualityTier } from "@/store/gameStore";
 import { pixelRatioFor, shouldAntialias } from "./pixelBudget";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-
 import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
 import { EffectsManager } from "./EffectsManager";
@@ -59,18 +54,6 @@ const BRAKE_LIGHT_ON = new THREE.Color("#ff0000");
 const BRAKE_LIGHT_OFF = new THREE.Color("#7f1d1d");
 const BRAKE_EMISSIVE_ON = new THREE.Color("#ff0404");
 const BRAKE_EMISSIVE_OFF = new THREE.Color("#450a0a");
-/**
- * How long the frame rate has to hold up at native resolution before the bloom pass is
- * allowed on, and how long it is locked out again after any downscale.
- *
- * Gating bloom on `currentDprScale >= 1` alone is a feedback loop: bloom costs frames, the
- * scaler drops resolution, that switches bloom off, the frames come back, the scaler climbs
- * to native, bloom returns, and it all happens again. The player feels the cycle, not the
- * effect. A lockout makes the decision stick, and starting locked out means a device only
- * ever gets bloom after it has demonstrated it can afford it.
- */
-const BLOOM_LOCKOUT_S = 12;
-
 const DISC_HOT = new THREE.Color("#ea580c");
 const DISC_COLD = new THREE.Color("#475569");
 
@@ -131,10 +114,6 @@ export class GameRenderer {
   private lowFpsTimer = 0;
   private highFpsTimer = 0;
   private currentDprScale = 1.0;
-  private composer: EffectComposer | null = null;
-  private bloomPass: UnrealBloomPass | null = null;
-  /** Seconds of sustained full-resolution running still owed before bloom may come back. */
-  private bloomLockoutS = BLOOM_LOCKOUT_S;
   private qualityTier: QualityTier = "high";
   /**
    * Ring buffer of recent frame times, milliseconds. The auto-scaler judges on the MEDIAN of
@@ -508,14 +487,12 @@ export class GameRenderer {
     this.renderer.setSize(width, height, false);
     // The budget is an area, so resizing the window changes the ratio it allows.
     this.renderer.setPixelRatio(this.targetPixelRatio() * this.currentDprScale);
-    this.syncComposer();
   };
 
   public setQualityTier(tier: QualityTier): void {
     this.qualityTier = tier;
     this.renderer.setPixelRatio(this.targetPixelRatio() * this.currentDprScale);
     this.renderer.shadowMap.enabled = tier !== "low";
-    this.syncComposer();
   }
 
   /**
@@ -530,10 +507,6 @@ export class GameRenderer {
    */
   private applyPixelRatio(ratio: number): void {
     this.renderer.setPixelRatio(ratio);
-    // The post chain owns render targets sized off the drawing buffer, and the scaler's whole
-    // purpose is to shrink that buffer when frames are late. Re-syncing here is also what
-    // drops bloom entirely the first time the scaler goes below native.
-    this.syncComposer();
     this.frameMsFilled = 0;
     this.frameMsWrite = 0;
     this.dprCooldown = DPR_CHANGE_COOLDOWN_S;
@@ -687,40 +660,26 @@ export class GameRenderer {
             if (mat) {
               mat.color.copy(isBraking ? BRAKE_LIGHT_ON : BRAKE_LIGHT_OFF);
               mat.emissive.copy(isBraking ? BRAKE_EMISSIVE_ON : BRAKE_EMISSIVE_OFF);
-              // ACES SEES THESE NOW, WHICH `toneMapped: false` NO LONGER PREVENTS.
-              //
-              // three turns off a material's own tone mapping whenever it renders into a
-              // target, and the composer puts one in the way — so the lamps arrive at
-              // OutputPass raw and get ACES applied there like everything else. ACES pushes a
-              // very bright saturated red towards orange and then white, so at 3.0 the lens
-              // was a white hole rather than a red light.
-              //
-              // That sets up a tension with the bloom threshold, which the lamp has to CLEAR
-              // to glow at all: brighter blooms harder but turns orange, and the threshold
-              // cannot simply come down to meet it — at 0.85 the sunlit white bodywork of the
-              // Weiss-Blau starts blooming along its roof rails and deck, which is worse than
-              // an orange lamp. So the threshold stays above the bodywork at 1.15 and the lamp
-              // sits just over it, with the hue pulled back by a purer red emissive instead of
-              // by dimming.
-              mat.emissiveIntensity = isBraking ? 1.55 : 0.6;
+              // Bright enough to clip to a saturated red. `toneMapped: false` keeps the
+              // lens out of the ACES curve, which only works because there is no post chain:
+              // three disables a material's own tone mapping the moment it renders into a
+              // target, so while the bloom pass existed these went orange instead.
+              mat.emissiveIntensity = isBraking ? 2.2 : 0.6;
             }
           }
         }
 
         // 5a. Brake Halos
         //
-        // Eased rather than snapped: a lamp's apparent bloom grows with its brightness, and a
+        // Eased rather than snapped: a lamp's apparent glow grows with its brightness, and a
         // hard step to full opacity reads as a flicker at 60 Hz. Two additive quads, which is
-        // why there is no bloom post-pass — see CarMeshBuilder.
+        // the whole of the effect — see renderFrame for why there is no bloom pass.
         for (const glow of this.carMeshResult.brakeGlowMeshes) {
           const mat = glow.material as THREE.MeshBasicMaterial;
-          // THE QUAD AND THE BLOOM PASS ARE ALTERNATIVES, NOT LAYERS.
-          //
-          // The quad is a 0.6 m additive disc centred on each lamp. Over blue paint that is a
-          // soft purple blob sitting on the rear quarters — which, next to a bloom halo doing
-          // the same job, read as the bodywork having gone translucent. Where bloom is running
-          // it needs only a faint core; where it is not, the quad is the whole effect.
-          const target = isBraking ? (this.composer ? 0.1 : 0.55) : 0.0;
+          // A 0.6 m additive disc centred on each lamp. Kept modest: stacked with the bloom
+          // pass this used to make a purple blob on the rear quarters that read as the
+          // bodywork going translucent. With the pass gone it is the whole halo.
+          const target = isBraking ? 0.55 : 0.0;
           if (mat.opacity !== target) {
             mat.opacity += (target - mat.opacity) * Math.min(1, deltaSeconds * 18);
             if (Math.abs(target - mat.opacity) < 0.004) mat.opacity = target;
@@ -829,12 +788,6 @@ export class GameRenderer {
       this.frameMsWrite = (this.frameMsWrite + 1) % FPS_WINDOW;
       if (this.frameMsFilled < FPS_WINDOW) this.frameMsFilled++;
       if (this.dprCooldown > 0) this.dprCooldown -= deltaSeconds;
-      // Only counts down while the device is actually holding native resolution, so the clock
-      // measures demonstrated headroom rather than elapsed time.
-      if (this.bloomLockoutS > 0 && this.currentDprScale >= 0.999) {
-        this.bloomLockoutS -= deltaSeconds;
-        if (this.bloomLockoutS <= 0) this.syncComposer();
-      }
 
       const baseDpr = this.targetPixelRatio();
       // Median frame time over the window, or Infinity fps while still filling it / cooling
@@ -857,9 +810,6 @@ export class GameRenderer {
         const sustain = currentFps < URGENT_FPS ? URGENT_SUSTAIN_S : 1.2;
         if (this.lowFpsTimer > sustain) {
           this.currentDprScale = Math.max(0.6, this.currentDprScale - 0.15);
-          // Any downscale is this device telling us it has no headroom. Lock bloom out for a
-          // stretch rather than letting it return the moment the resolution recovers.
-          this.bloomLockoutS = BLOOM_LOCKOUT_S;
           this.applyPixelRatio(baseDpr * this.currentDprScale);
           this.lowFpsTimer = 0;
         }
@@ -885,66 +835,26 @@ export class GameRenderer {
 
   /** Render a single frame without advancing physics. Used by visual diagnostics. */
   /**
-   * Whether the bloom chain should be running.
+   * BLOOM WAS REMOVED, NOT DISABLED.
    *
-   * Bloom is a full-screen cost — a bright-pass plus five blur mip levels plus a composite,
-   * every frame, over the whole drawing buffer — and this project is fill-rate bound before
-   * it is anything else. So it is not offered on the lower quality tiers, and it switches
-   * itself off the moment the adaptive resolution scaler has had to drop below native: a
-   * machine that cannot hold the frame rate at full resolution has no business spending
-   * milliseconds on a halo. That check is what keeps this from undoing the frame budget.
+   * It was added on request and it did what it was asked to do, but it is a full-screen cost
+   * every frame — a bright pass, five blur mip pairs and a composite — on a project that is
+   * fill-rate bound before it is anything else, and it was reported as a frame-rate
+   * regression on real hardware twice. Leaving the chain in place behind a flag would still
+   * have cost the render target it draws into and the branch on every frame, for an effect
+   * nobody on that hardware would ever see.
+   *
+   * What it bought is covered by the additive halo quads on the tail lamps, which are two
+   * blended quads rather than a pass over every pixel. Removing it also gives the lamps their
+   * colour back: three only disables a material's own tone mapping when it renders into a
+   * target, so with no composer in the way `toneMapped: false` applies again and the lenses
+   * are red rather than ACES-shifted orange.
    */
-  private bloomWanted(): boolean {
-    return this.qualityTier === "high" && this.currentDprScale >= 0.999 && this.bloomLockoutS <= 0;
-  }
-
-  /** Builds or tears down the post chain to match `bloomWanted()`, and keeps it sized. */
-  private syncComposer(): void {
-    const want = this.bloomWanted();
-    if (!want) {
-      if (this.composer) {
-        this.composer.dispose();
-        this.composer = null;
-        this.bloomPass = null;
-      }
-      return;
-    }
-
-    const width = this.canvas.clientWidth || 1;
-    const height = this.canvas.clientHeight || 1;
-
-    if (!this.composer) {
-      this.composer = new EffectComposer(this.renderer);
-      this.composer.addPass(new RenderPass(this.scene, this.camera));
-      // Threshold is in LINEAR light, not in sRGB: three turns off the materials' own tone
-      // mapping when it renders into a target, so the composer sees the raw values. Sunlit
-      // white bodywork lands near 1.0, so the cut sits above that and only the lamps — whose
-      // emissive runs to 3.0 — actually pass it. Strength and radius are deliberately modest;
-      // this is meant to make the brake lights radiate, not to fog the screen.
-      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.30, 0.22, 1.15);
-      this.composer.addPass(this.bloomPass);
-      // Applies tone mapping and the output colour space, which the materials no longer do
-      // for themselves once there is a render target in the way.
-      this.composer.addPass(new OutputPass());
-    }
-
-    // `EffectComposer.setSize` already forwards `width * pixelRatio` to every pass, so DO NOT
-    // call `bloomPass.setSize` afterwards: passing the CSS size again overwrites the scaled
-    // one, and the pass then runs at half resolution on a 2x display. Its blur kernel is
-    // measured in pass pixels, so halving the resolution DOUBLES the halo in screen terms —
-    // which on a Retina screen turned the brake lights into a purple wash across the whole
-    // rear of the car, bright enough to read as though the bodywork had gone transparent.
-    this.composer.setPixelRatio(this.renderer.getPixelRatio());
-    this.composer.setSize(width, height);
-  }
-
   private renderFrame(): void {
-    if (this.composer) this.composer.render();
-    else this.renderer.render(this.scene, this.camera);
+    this.renderer.render(this.scene, this.camera);
   }
 
   public renderOnce(): void {
-    this.syncComposer();
     this.renderFrame();
   }
 
@@ -957,9 +867,6 @@ export class GameRenderer {
 
   public destroy(): void {
     this.stop();
-    this.composer?.dispose();
-    this.composer = null;
-    this.bloomPass = null;
     window.removeEventListener("resize", this.handleResize);
 
     // `WebGLRenderer.dispose()` below only frees the renderer's own GPU-side program and

@@ -5,6 +5,7 @@
  */
 
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { CarDef } from "../vehicle/cars";
 
 export interface CarMeshResult {
@@ -218,6 +219,38 @@ export class CarMeshBuilder {
     tex.colorSpace = THREE.SRGBColorSpace;
     CarMeshBuilder.environmentTexture = tex;
     return tex;
+  }
+
+  /**
+   * Bakes a set of transformed parts into ONE geometry, carrying each part's colour per
+   * vertex so a single material can draw them all.
+   *
+   * A draw call is not free, and a wheel was eleven to thirteen of them — tyre, tread, dish,
+   * lip, hub, cap, disc, caliper and a spoke each. Times four wheels that was around half of
+   * the car's 96 meshes, and the car is on screen in every frame of the game. Merging costs
+   * nothing at runtime: the parts are rigid relative to each other and spin as a unit, so
+   * baking their transforms in loses nothing.
+   */
+  private static mergeColoured(
+    parts: { geometry: THREE.BufferGeometry; matrix: THREE.Matrix4; color: THREE.Color }[]
+  ): THREE.BufferGeometry {
+    const prepared = parts.map(({ geometry, matrix, color }) => {
+      const g = geometry.clone().applyMatrix4(matrix);
+      const count = g.attributes.position.count;
+      const colors = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      }
+      g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      return g;
+    });
+    // Material colours are already in the renderer's working space, so they can go straight
+    // into a vertex attribute; converting again would double the transform.
+    const merged = mergeGeometries(prepared, false)!;
+    for (const g of prepared) g.dispose();
+    return merged;
   }
 
   public static orientFacesOutward(geo: THREE.BufferGeometry): void {
@@ -1125,60 +1158,63 @@ export class CarMeshBuilder {
     // quartering evoke the works cars without copying a real manufacturer's trademarked
     // emblem, which this project has no licence to use.
     if (car.id === "weiss-blau-30") {
-      const liveryGroup = new THREE.Group();
+      // ONE MESH, NOT FOURTEEN. Six flank stripes, three nose stripes, a ring and four
+      // quadrants are all matte paint differing only in colour, which is exactly what a
+      // vertex-coloured merge is for. As separate meshes the livery cost more draw calls than
+      // the rest of the bodywork put together.
+      const liveryParts: { geometry: THREE.BufferGeometry; matrix: THREE.Matrix4; color: THREE.Color }[] = [];
+      const at = (x: number, y: number, z: number) => new THREE.Matrix4().makeTranslation(x, y, z);
 
       // Tricolour: light blue, dark blue, red — the classic motorsport banding.
-      const stripeColors = ["#3aa0dc", "#12256b", "#d42026"];
+      const stripeColors = ["#3aa0dc", "#12256b", "#d42026"].map((hex) => new THREE.Color(hex));
       const stripeW = 0.075;
       const halfBody = 0.86;
 
+      const flankGeo = new THREE.BoxGeometry(0.012, stripeW, 1.95);
       for (const side of [-1, 1]) {
-        stripeColors.forEach((hex, i) => {
-          const stripe = new THREE.Mesh(
-            new THREE.BoxGeometry(0.012, stripeW, 1.95),
-            new THREE.MeshStandardMaterial({ color: hex, roughness: 0.42, metalness: 0.05 })
-          );
+        stripeColors.forEach((color, i) => {
           // Stacked band running along the flank, just below the window line.
-          stripe.position.set(side * halfBody, 0.27 + i * (stripeW + 0.010), 0.02);
-          liveryGroup.add(stripe);
+          liveryParts.push({
+            geometry: flankGeo,
+            matrix: at(side * halfBody, 0.27 + i * (stripeW + 0.01), 0.02),
+            color,
+          });
         });
       }
 
       // A shorter run of the same banding across the nose.
-      stripeColors.forEach((hex, i) => {
-        const nose = new THREE.Mesh(
-          new THREE.BoxGeometry(0.52, 0.012, stripeW),
-          new THREE.MeshStandardMaterial({ color: hex, roughness: 0.42, metalness: 0.05 })
-        );
-        nose.position.set(-0.30 + i * (stripeW + 0.012), 0.545, frontZ - 0.18);
-        liveryGroup.add(nose);
+      const noseGeo = new THREE.BoxGeometry(0.52, 0.012, stripeW);
+      stripeColors.forEach((color, i) => {
+        liveryParts.push({
+          geometry: noseGeo,
+          matrix: at(-0.3 + i * (stripeW + 0.012), 0.545, frontZ - 0.18),
+          color,
+        });
       });
 
-      // Quartered roundel on the bonnet: white outer ring, then alternating blue and white
+      // Quartered roundel on the bonnet: dark outer ring, then alternating blue and white
       // quadrants. Built from wedges rather than a texture so it needs no image asset.
       const roundelY = 0.556;
       const roundelZ = frontZ - 0.62;
-      const ring = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.155, 0.155, 0.014, 28),
-        new THREE.MeshStandardMaterial({ color: "#101418", roughness: 0.5, metalness: 0.3 })
-      );
-      ring.position.set(0, roundelY, roundelZ);
-      liveryGroup.add(ring);
-
+      liveryParts.push({
+        geometry: new THREE.CylinderGeometry(0.155, 0.155, 0.014, 28),
+        matrix: at(0, roundelY, roundelZ),
+        color: new THREE.Color("#101418"),
+      });
       for (let q = 0; q < 4; q++) {
-        const wedge = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.125, 0.125, 0.016, 14, 1, false, (q * Math.PI) / 2, Math.PI / 2),
-          new THREE.MeshStandardMaterial({
-            color: q % 2 === 0 ? "#f4f7fa" : "#1e4fa3",
-            roughness: 0.45,
-            metalness: 0.05,
-          })
-        );
-        wedge.position.set(0, roundelY + 0.002, roundelZ);
-        liveryGroup.add(wedge);
+        liveryParts.push({
+          geometry: new THREE.CylinderGeometry(0.125, 0.125, 0.016, 14, 1, false, (q * Math.PI) / 2, Math.PI / 2),
+          matrix: at(0, roundelY + 0.002, roundelZ),
+          color: new THREE.Color(q % 2 === 0 ? "#f4f7fa" : "#1e4fa3"),
+        });
       }
 
-      chassisGroup.add(liveryGroup);
+      chassisGroup.add(
+        new THREE.Mesh(
+          CarMeshBuilder.mergeColoured(liveryParts),
+          new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.44, metalness: 0.05 })
+        )
+      );
     }
 
     carGroup.add(chassisGroup);
@@ -1324,6 +1360,52 @@ export class CarMeshBuilder {
 
     const discGeo = new THREE.CylinderGeometry(wheelRadius * 0.50, wheelRadius * 0.50, 0.03, 14);
 
+    // TWO DRAW CALLS PER WHEEL, NOT TWELVE.
+    //
+    // Everything that spins is rigid relative to everything else that spins, so it can be one
+    // geometry. The split is by how the surface behaves, not by what colour it is: rubber is
+    // matte, the rim is polished metal, and each part's own colour rides along per vertex —
+    // which is what keeps the bright spokes reading against the dark dish behind them.
+    const axleTurn = new THREE.Matrix4().makeRotationZ(Math.PI / 2);
+    const numSpokes = bodyStyle === "rally_hatch" ? 3 : bodyStyle === "sport_mid" ? 5 : 4;
+
+    const rubberMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.9,
+      metalness: 0.08,
+    });
+    const wheelMetalMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      metalness: 0.85,
+      roughness: 0.26,
+      envMap,
+      envMapIntensity: 1.0,
+    });
+
+    const buildWheel = (parts: WheelParts) => {
+      const rubber = CarMeshBuilder.mergeColoured([
+        { geometry: parts.tire, matrix: axleTurn, color: tireMat.color },
+        { geometry: parts.tread, matrix: axleTurn, color: treadMat.color },
+      ]);
+      const metal: { geometry: THREE.BufferGeometry; matrix: THREE.Matrix4; color: THREE.Color }[] = [
+        { geometry: parts.barrel, matrix: axleTurn, color: dishMat.color },
+        { geometry: parts.lip, matrix: axleTurn, color: rimMat.color },
+        { geometry: parts.hub, matrix: axleTurn, color: hubMat.color },
+        { geometry: parts.cap, matrix: axleTurn, color: rimMat.color },
+      ];
+      for (let sp = 0; sp < numSpokes; sp++) {
+        metal.push({
+          geometry: parts.spoke,
+          matrix: new THREE.Matrix4().makeRotationX((sp * Math.PI) / numSpokes),
+          color: rimMat.color,
+        });
+      }
+      return { rubber, metal: CarMeshBuilder.mergeColoured(metal) };
+    };
+
+    const frontMerged = buildWheel(frontWheel);
+    const rearMerged = frontWheel === rearWheel ? frontMerged : buildWheel(rearWheel);
+
     for (let i = 0; i < 4; i++) {
       const pivotGroup = new THREE.Group();
       pivotGroup.position.set(wheelPositions[i][0], wheelPositions[i][1], wheelPositions[i][2]);
@@ -1331,41 +1413,21 @@ export class CarMeshBuilder {
       const spinGroup = new THREE.Group();
       // Wider rubber on the driven axle. Seen tread-on from the chase camera, a narrow rear
       // tyre is most of what makes a rally car look under-tyred from behind.
-      const parts = i >= 2 ? rearWheel : frontWheel;
+      const merged = i >= 2 ? rearMerged : frontMerged;
 
-      const tire = new THREE.Mesh(parts.tire, tireMat);
-      tire.rotation.z = Math.PI / 2;
-      tire.castShadow = true;
+      const rubber = new THREE.Mesh(merged.rubber, rubberMat);
+      rubber.castShadow = true;
+      const metal = new THREE.Mesh(merged.metal, wheelMetalMat);
 
-      const tread = new THREE.Mesh(parts.tread, treadMat);
-      tread.rotation.z = Math.PI / 2;
-
-      const barrel = new THREE.Mesh(parts.barrel, dishMat);
-      barrel.rotation.z = Math.PI / 2;
-
-      const cap = new THREE.Mesh(parts.cap, rimMat);
-      cap.rotation.z = Math.PI / 2;
-
-      const lip = new THREE.Mesh(parts.lip, rimMat);
-      lip.rotation.z = Math.PI / 2;
-
-      const hub = new THREE.Mesh(parts.hub, hubMat);
-      hub.rotation.z = Math.PI / 2;
-
+      // Stays its own mesh: its colour changes when the brakes get hot.
       const discMat = new THREE.MeshBasicMaterial({ color: "#475569" });
       const disc = new THREE.Mesh(discGeo, discMat);
       disc.rotation.z = Math.PI / 2;
       brakeDiscs.push(disc);
 
-      spinGroup.add(tire, tread, barrel, lip, hub, cap, disc);
+      spinGroup.add(rubber, metal, disc);
 
-      const numSpokes = bodyStyle === "rally_hatch" ? 3 : bodyStyle === "sport_mid" ? 5 : 4;
-      for (let s = 0; s < numSpokes; s++) {
-        const spoke = new THREE.Mesh(parts.spoke, rimMat);
-        spoke.rotation.x = (s * Math.PI) / numSpokes;
-        spinGroup.add(spoke);
-      }
-
+      // Bolted to the upright, so it does not turn with the wheel.
       const caliper = new THREE.Mesh(caliperGeo, caliperMat);
       caliper.position.set(0, wheelRadius * 0.22, 0);
 
