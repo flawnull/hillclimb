@@ -230,6 +230,60 @@ describe("Car model", () => {
     }
   });
 
+  it("nothing on the nose hangs outside the bodywork", () => {
+    // Same rule as the tail, and it was left undone there once already. The nose lamps were a
+    // fixed 0.12 m lens in a 0.135 m ring at y = 0.30: the mid-engined car's nose runs 0.10 to
+    // 0.32, so a 0.27 m ring cannot fit in it at ANY height and the lamps stood proud of the
+    // bonnet — clearly visible over the nose from behind the car. The four noses differ by
+    // 12 cm in height, so these cannot be constants.
+    for (const v of ALL_VARIANTS) {
+      const result = CarMeshBuilder.buildCarModel(CAR_DEFS[v.id], v.colorIndex);
+      result.carGroup.updateMatrixWorld(true);
+
+      const shell = new THREE.Group();
+      const opaque = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+      for (const src of [result.chassisMesh, result.glassMesh]) {
+        const m = new THREE.Mesh(src.geometry, opaque);
+        m.applyMatrix4(src.matrixWorld);
+        shell.add(m);
+      }
+      shell.updateMatrixWorld(true);
+      const shellBox = new THREE.Box3().setFromObject(shell);
+
+      const offenders: string[] = [];
+      for (const part of result.nosePanelMeshes) {
+        part.geometry.computeBoundingBox();
+        const box = part.geometry.boundingBox!.clone().applyMatrix4(part.matrixWorld);
+        // Above the bonnet is the failure that was reported; below it is the bumper line.
+        if (box.max.y > shellBox.max.y) {
+          offenders.push(`rises to ${box.max.y.toFixed(3)} where the body stops at ${shellBox.max.y.toFixed(3)}`);
+        }
+        for (const y of [box.min.y, (box.min.y + box.max.y) / 2, box.max.y]) {
+          const z = shellBox.max.z - 0.01; // just inside the nose cap
+          const ray = new THREE.Raycaster();
+          for (const dir of [-1, 1]) {
+            const reach = dir < 0 ? Math.abs(box.min.x) : box.max.x;
+            ray.set(new THREE.Vector3(0, y, z), new THREE.Vector3(dir, 0, 0));
+            const hits = ray.intersectObject(shell, true);
+            const bodyHalfWidth = hits.length ? hits[hits.length - 1].distance : 0;
+            if (reach > bodyHalfWidth + 1e-3) {
+              offenders.push(
+                `reaches ${reach.toFixed(3)} m at y=${y.toFixed(3)} where the body is ${bodyHalfWidth.toFixed(3)} m`
+              );
+            }
+          }
+        }
+      }
+
+      assert.deepEqual(
+        offenders,
+        [],
+        `${v.id}/${v.colorIndex}: ${offenders.length} nose overhang(s) — ${offenders.slice(0, 3).join("; ")}. ` +
+          `Size the lamps from the front section's profile, not from constants.`
+      );
+    }
+  });
+
   it("tail panel features do not intersect one another", () => {
     // The twin exhaust tips ran straight through the bottom of the number plate on the blue
     // car: the tail is only 0.34 m deep, so a fixed-size lamp housing and plate crowded the

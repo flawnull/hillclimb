@@ -27,6 +27,8 @@ export interface CarMeshResult {
   /** Lamps, housing and plate mounted on the tail. Every one must sit within the bodywork —
    *  see tests/car-model.test.ts. */
   tailPanelMeshes: THREE.Mesh[];
+  /** Lamps and grille mounted on the nose, under the same rule. */
+  nosePanelMeshes: THREE.Mesh[];
   brakeDiscs: THREE.Mesh[];
   exhaustFlame: THREE.Mesh | null;
   perkGlowMesh: THREE.Mesh | null;
@@ -305,6 +307,7 @@ export class CarMeshBuilder {
     const brakeGlowMeshes: THREE.Mesh[] = [];
     const brakeDiscs: THREE.Mesh[] = [];
     const tailPanelMeshes: THREE.Mesh[] = [];
+    const nosePanelMeshes: THREE.Mesh[] = [];
 
     const colorway = car.colorways[colorIndex] || car.colorways[0];
     const bodyStyle = colorway.bodyStyle || "coupe";
@@ -635,33 +638,60 @@ export class CarMeshBuilder {
         pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
         idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
       };
-      // Four corners of the liner's cross-section at one section, ordered around the ring.
-      const ringAt = (k: number): Pt3[] => {
-        const sec = sections[k];
-        const hw = Math.max(0.05, sec.wTop / 2 - 0.025);
-        const lo = sec.yBelt - 0.02;
-        const hi = Math.max(lo + 0.04, sec.yTop - 0.025);
-        return [
-          { x: -hw, y: lo, z: sec.z },
-          { x: hw, y: lo, z: sec.z },
-          { x: hw, y: hi, z: sec.z },
-          { x: -hw, y: hi, z: sec.z },
-        ];
+
+      /**
+       * The liner's cross-section at one section: THE BODY'S OWN PROFILE, shrunk slightly.
+       *
+       * A rectangle inscribed in the cabin does not work, and that is what was here. The
+       * opening is a trapezoid — wide at the belt, narrow at the roof — so a box that fits
+       * inside it at the roof leaves triangular gaps at the shoulders, and a sight line
+       * entering one of those goes clean through the car. Magenta-testing the old liner showed
+       * it covering the backlight and missing the whole front of the greenhouse, which is
+       * where the wheel was showing through.
+       *
+       * Taking the same ring the bodywork is lofted from and scaling it about the cabin's own
+       * centre keeps the SHAPE, so the liner sits just inside the glass everywhere along it
+       * with no corner to leak through.
+       */
+      const linerRing = (k: number): Pt3[] => {
+        const ring = rings[k];
+        const z = sections[k].z;
+        const midY = (ring[R_BELT_LOWER].y + ring[R_ROOF_CENTRE].y) / 2;
+        const shrink = 0.93;
+        const pull = (pt: Pt2, mirror: number): Pt3 => ({
+          x: mirror * pt.x * shrink,
+          y: midY + (pt.y - midY) * shrink,
+          z,
+        });
+        const out: Pt3[] = [];
+        // Up the left side, from the shoulder to the roof centre...
+        for (let i = R_BELT_LOWER; i <= R_ROOF_CENTRE; i++) out.push(pull(ring[i], 1));
+        // ...and back down the right, skipping the centre point the two sides share.
+        for (let i = R_ROOF_CENTRE - 1; i >= R_BELT_LOWER; i--) out.push(pull(ring[i], -1));
+        return out;
       };
 
       for (let k = LINER_FIRST; k < LINER_LAST; k++) {
-        const a = ringAt(k);
-        const b = ringAt(k + 1);
-        for (let i = 0; i < 4; i++) {
-          const j = (i + 1) % 4;
+        const a = linerRing(k);
+        const b = linerRing(k + 1);
+        for (let i = 0; i < a.length; i++) {
+          const j = (i + 1) % a.length;
           quad(a[i], b[i], b[j], a[j]);
         }
       }
       // Close both ends, or the shell is a tube and you can see straight down it.
-      const front = ringAt(LINER_FIRST);
-      const back = ringAt(LINER_LAST);
-      quad(front[0], front[1], front[2], front[3]);
-      quad(back[0], back[1], back[2], back[3]);
+      for (const k of [LINER_FIRST, LINER_LAST]) {
+        const ring = linerRing(k);
+        for (let i = 1; i < ring.length - 1; i++) {
+          const base = pos.length / 3;
+          pos.push(
+            ring[0].x, ring[0].y, ring[0].z,
+            ring[i].x, ring[i].y, ring[i].z,
+            ring[i + 1].x, ring[i + 1].y, ring[i + 1].z
+          );
+          idx.push(base, base + 1, base + 2);
+        }
+      }
 
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
@@ -742,22 +772,53 @@ export class CarMeshBuilder {
         toneMapped: false,
       });
 
+    // THE NOSE LAMPS ARE SIZED FROM THE NOSE, exactly as the tail cluster is.
+    //
+    // They were fixed radii: a 0.12 m lens inside a 0.135 m chrome ring, sitting at y = 0.30.
+    // The mid-engined car's nose runs from 0.10 to 0.32, so it is 0.22 m tall — a 0.27 m ring
+    // cannot fit in it at any height, and the lamps stood proud of the bonnet, visible over the
+    // nose from behind the car. The four noses differ by 12 cm in height, so this cannot be a
+    // constant any more than the tail could.
+    const frontSection = sections[0];
+    const noseHeight = frontSection.yTop - frontSection.ySill;
+    /** Outer lens radius. The ring around it is 13% larger, matching the original proportion. */
+    const hlRadius = Math.min(0.12, noseHeight * 0.30);
+    const hlRingRadius = hlRadius * 1.13;
+    /** High in the nose, but with the ring's full height clear of the bonnet edge. */
+    const hlY = Math.max(
+      frontSection.ySill + hlRingRadius + 0.015,
+      frontSection.yTop - hlRingRadius - 0.015
+    );
+    /** Furthest a lamp of this size can sit from the centreline and stay on the nose. */
+    const hlMaxOffset =
+      Math.min(
+        halfWidthAt(frontSection, hlY - hlRingRadius),
+        halfWidthAt(frontSection, hlY + hlRingRadius)
+      ) - hlRingRadius - 0.02;
+    /** Pulls an authored offset in until the lamp fits, keeping its side. */
+    const hlFit = (offX: number, radius: number) => {
+      const room = Math.max(0.02, hlMaxOffset + (hlRingRadius - radius * 1.13));
+      return Math.sign(offX) * Math.min(Math.abs(offX), room);
+    };
+
     // Front Grilles & Lights by Body Style
     if (bodyStyle === "rally_hatch") {
-      const podRimGeo = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 14);
-      const podLensGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.06, 14);
+      const podRimGeo = new THREE.CylinderGeometry(hlRingRadius, hlRingRadius, 0.04, 14);
+      const podLensGeo = new THREE.CylinderGeometry(hlRadius, hlRadius, 0.06, 14);
       const podMat = lampMat("#fef08a", "#facc15", 1.6);
 
-      for (const offX of [-0.48, -0.18, 0.18, 0.48]) {
+      for (const raw of [-0.48, -0.18, 0.18, 0.48]) {
+        const offX = hlFit(raw, hlRadius);
         const podRim = new THREE.Mesh(podRimGeo, chromeMat);
         podRim.rotation.x = Math.PI / 2;
-        podRim.position.set(offX, 0.36, frontZ + 0.03);
+        podRim.position.set(offX, hlY, frontZ + 0.03);
 
         const pod = new THREE.Mesh(podLensGeo, podMat);
         pod.rotation.x = Math.PI / 2;
-        pod.position.set(offX, 0.36, frontZ + 0.06);
+        pod.position.set(offX, hlY, frontZ + 0.06);
         chassisGroup.add(podRim, pod);
         headlightGlowMeshes.push(pod);
+        nosePanelMeshes.push(podRim, pod);
       }
 
       const scoop = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.12, 0.40), trimMat);
@@ -783,20 +844,22 @@ export class CarMeshBuilder {
       const bullBar = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.28, 0.08), trimMat);
       bullBar.position.set(0, 0.32, frontZ + 0.05);
 
-      const safariRimGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.04, 14);
-      const safariLensGeo = new THREE.CylinderGeometry(0.10, 0.10, 0.06, 14);
+      const safariRimGeo = new THREE.CylinderGeometry(hlRingRadius, hlRingRadius, 0.04, 14);
+      const safariLensGeo = new THREE.CylinderGeometry(hlRadius, hlRadius, 0.06, 14);
       const safariMat = lampMat("#fef08a", "#facc15", 1.5);
 
-      for (const offX of [-0.35, 0.35]) {
+      for (const raw of [-0.35, 0.35]) {
+        const offX = hlFit(raw, hlRadius);
         const sfRim = new THREE.Mesh(safariRimGeo, chromeMat);
         sfRim.rotation.x = Math.PI / 2;
-        sfRim.position.set(offX, 0.36, frontZ + 0.06);
+        sfRim.position.set(offX, hlY, frontZ + 0.06);
 
         const sf = new THREE.Mesh(safariLensGeo, safariMat);
         sf.rotation.x = Math.PI / 2;
-        sf.position.set(offX, 0.36, frontZ + 0.09);
+        sf.position.set(offX, hlY, frontZ + 0.09);
         chassisGroup.add(sfRim, sf);
         headlightGlowMeshes.push(sf);
+        nosePanelMeshes.push(sfRim, sf);
       }
       chassisGroup.add(bullBar);
 
@@ -810,45 +873,57 @@ export class CarMeshBuilder {
       chassisGroup.add(rack, spareTire);
     } else if (bodyStyle === "sport_mid") {
       const hlMat = lampMat("#f8fafc", "#bae6fd", 1.8);
-      const hlGeoOuter = new THREE.CylinderGeometry(0.12, 0.12, 0.04, 14);
-      const hlGeoInner = new THREE.CylinderGeometry(0.09, 0.09, 0.04, 14);
-      const ringGeoOuter = new THREE.CylinderGeometry(0.135, 0.135, 0.02, 14);
-      const ringGeoInner = new THREE.CylinderGeometry(0.105, 0.105, 0.02, 14);
+      const innerRadius = hlRadius * 0.75;
+      const hlGeoOuter = new THREE.CylinderGeometry(hlRadius, hlRadius, 0.04, 14);
+      const hlGeoInner = new THREE.CylinderGeometry(innerRadius, innerRadius, 0.04, 14);
+      const ringGeoOuter = new THREE.CylinderGeometry(hlRingRadius, hlRingRadius, 0.02, 14);
+      const ringGeoInner = new THREE.CylinderGeometry(innerRadius * 1.13, innerRadius * 1.13, 0.02, 14);
 
-      for (const [offX, isOuter] of [[-0.52, true], [0.52, true], [-0.22, false], [0.22, false]] as [number, boolean][]) {
+      for (const [raw, isOuter] of [[-0.52, true], [0.52, true], [-0.22, false], [0.22, false]] as [number, boolean][]) {
+        const radius = isOuter ? hlRadius : innerRadius;
+        const offX = hlFit(raw, radius);
         const ring = new THREE.Mesh(isOuter ? ringGeoOuter : ringGeoInner, chromeMat);
         ring.rotation.x = Math.PI / 2;
-        ring.position.set(offX, 0.30, frontZ + 0.02);
+        ring.position.set(offX, hlY, frontZ + 0.02);
 
         const hl = new THREE.Mesh(isOuter ? hlGeoOuter : hlGeoInner, hlMat);
         hl.rotation.x = Math.PI / 2;
-        hl.position.set(offX, 0.30, frontZ + 0.04);
+        hl.position.set(offX, hlY, frontZ + 0.04);
         chassisGroup.add(ring, hl);
         headlightGlowMeshes.push(hl);
+        nosePanelMeshes.push(ring, hl);
       }
     } else {
-      const grille = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.16, 0.04), trimMat);
-      grille.position.set(0, 0.28, frontZ + 0.02);
-      const kidneyL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.20, 0.05), chromeMat);
-      kidneyL.position.set(-0.11, 0.28, frontZ + 0.03);
-      const kidneyR = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.20, 0.05), chromeMat);
-      kidneyR.position.set(0.11, 0.28, frontZ + 0.03);
-      chassisGroup.add(grille, kidneyL, kidneyR);
+      // Grille height follows the nose too — a 0.20 m kidney on a 0.23 m nose overhung it.
+      const grilleH = Math.min(0.16, noseHeight * 0.55);
+      const kidneyH = Math.min(0.20, noseHeight * 0.68);
+      const grille = new THREE.Mesh(new THREE.BoxGeometry(0.95, grilleH, 0.04), trimMat);
+      grille.position.set(0, hlY, frontZ + 0.02);
+      const kidneys: THREE.Mesh[] = [];
+      for (const side of [-1, 1]) {
+        const kidney = new THREE.Mesh(new THREE.BoxGeometry(0.16, kidneyH, 0.05), chromeMat);
+        kidney.position.set(side * 0.11, hlY, frontZ + 0.03);
+        kidneys.push(kidney);
+      }
+      chassisGroup.add(grille, ...kidneys);
+      nosePanelMeshes.push(grille, ...kidneys);
 
       const hlMat = lampMat("#f8fafc", "#dbeafe", 2.0);
-      const hlGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.04, 14);
-      const hlRingGeo = new THREE.CylinderGeometry(0.125, 0.125, 0.02, 14);
+      const hlGeo = new THREE.CylinderGeometry(hlRadius, hlRadius, 0.04, 14);
+      const hlRingGeo = new THREE.CylinderGeometry(hlRingRadius, hlRingRadius, 0.02, 14);
 
-      for (const offX of [-0.54, 0.54]) {
+      for (const raw of [-0.54, 0.54]) {
+        const offX = hlFit(raw, hlRadius);
         const ring = new THREE.Mesh(hlRingGeo, chromeMat);
         ring.rotation.x = Math.PI / 2;
-        ring.position.set(offX, 0.32, frontZ + 0.02);
+        ring.position.set(offX, hlY, frontZ + 0.02);
 
         const hl = new THREE.Mesh(hlGeo, hlMat);
         hl.rotation.x = Math.PI / 2;
-        hl.position.set(offX, 0.32, frontZ + 0.04);
+        hl.position.set(offX, hlY, frontZ + 0.04);
         chassisGroup.add(ring, hl);
         headlightGlowMeshes.push(hl);
+        nosePanelMeshes.push(ring, hl);
       }
     }
 
@@ -1474,6 +1549,7 @@ export class CarMeshBuilder {
       brakeGlowMeshes,
       brakeDiscs,
       tailPanelMeshes,
+      nosePanelMeshes,
       exhaustFlame: flame,
       perkGlowMesh,
       spoilerGroup,
