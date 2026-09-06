@@ -292,6 +292,70 @@ describe("Car model", () => {
     }
   });
 
+  it("wheels sit a consistent, modest amount proud of the bodywork", () => {
+    // Track used to be set from the wheel CENTRE — a fixed 4 cm inside the sill — so how far
+    // a tyre stuck out depended on how wide it was. On the mid-engined car, whose rear rubber
+    // is 30% wider, the rears stood 12.3 cm proud against 8.5 cm at the front. Setting the
+    // OUTER FACE instead makes the overhang the same on both axles, and widening a tyre grows
+    // it inboard, under the arch.
+    for (const v of ALL_VARIANTS) {
+      const result = CarMeshBuilder.buildCarModel(CAR_DEFS[v.id], v.colorIndex);
+      result.carGroup.updateMatrixWorld(true);
+      const shell = new THREE.Box3().setFromObject(result.chassisMesh);
+
+      const overhangs: number[] = [];
+      for (const wheel of result.wheelGroups) {
+        const box = new THREE.Box3().setFromObject(wheel);
+        overhangs.push(Math.max(box.max.x - shell.max.x, -box.min.x + shell.min.x));
+      }
+
+      for (const o of overhangs) {
+        assert.ok(
+          o > 0,
+          `${v.id}/${v.colorIndex}: a wheel is level with or inside the body skin (${o.toFixed(3)} m). ` +
+            `The body has no arch cut into it, so a flush tyre loses its whole upper half.`
+        );
+        assert.ok(
+          o < 0.06,
+          `${v.id}/${v.colorIndex}: a wheel stands ${o.toFixed(3)} m proud of the bodywork. ` +
+            `Set the track from the tyre's OUTER FACE, not its centre.`
+        );
+      }
+      const spread = Math.max(...overhangs) - Math.min(...overhangs);
+      assert.ok(
+        spread < 0.015,
+        `${v.id}/${v.colorIndex}: front and rear overhang differ by ${spread.toFixed(3)} m, ` +
+          `which reads as lopsided rather than as a stance.`
+      );
+    }
+  });
+
+  it("the wheels are outside the group that leans on the suspension", () => {
+    // Brake dive and cornering roll are applied to a group every frame. If the wheels are in
+    // that group, rolling the car pivots them about the contact plane and drives the outer one
+    // down by halfTrack * sin(roll) — into the road, worst when the lean is largest, which is
+    // mid-drift. The structural guarantee is that no wheel is a descendant of the chassis.
+    for (const v of ALL_VARIANTS) {
+      const result = CarMeshBuilder.buildCarModel(CAR_DEFS[v.id], v.colorIndex);
+      for (const wheel of result.wheelGroups) {
+        let node: THREE.Object3D | null = wheel;
+        while (node) {
+          assert.notEqual(
+            node,
+            result.chassisGroup,
+            `${v.id}/${v.colorIndex}: a wheel is parented under chassisGroup, so the body lean ` +
+              `would move it. Wheels belong to carGroup, which carries only the road attitude.`
+          );
+          node = node.parent;
+        }
+      }
+      assert.ok(
+        result.chassisGroup.children.length > 0,
+        `${v.id}/${v.colorIndex}: chassisGroup is empty`
+      );
+    }
+  });
+
   it("no car material requests a transmission pass", () => {
     // `transmission > 0` makes three render the whole opaque scene into a second render
     // target every frame so refracting surfaces have something to sample. The glass was

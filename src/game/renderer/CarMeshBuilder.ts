@@ -10,6 +10,12 @@ import { CarDef } from "../vehicle/cars";
 
 export interface CarMeshResult {
   carGroup: THREE.Group;
+  /**
+   * Everything that leans on the suspension. The WHEELS ARE NOT IN HERE, deliberately: brake
+   * dive and cornering roll belong to the body, and applying them to the whole car drives the
+   * outer wheel through the road. See GameRenderer's per-frame attitude update.
+   */
+  chassisGroup: THREE.Group;
   chassisMesh: THREE.Mesh;
   glassMesh: THREE.Mesh;
   wheelGroups: THREE.Group[];
@@ -1260,10 +1266,33 @@ export class CarMeshBuilder {
     carGroup.add(perkGlowMesh);
 
     // Wheels
+    const rearWheelWidth =
+      bodyStyle === "rally_hatch" || bodyStyle === "sport_mid" ? wheelWidth * 1.3 : wheelWidth;
+
     const frontAxleZ = sections[1].z;
     const rearAxleZ = sections[5].z;
-    const frontHalfTrack = (sections[1].wSill / 2) - 0.04;
-    const rearHalfTrack = (sections[5].wSill / 2) - 0.04;
+    // TRACK IS SET FROM THE TYRE'S OUTER FACE, NOT ITS CENTRE.
+    //
+    // The old rule put the wheel CENTRE a fixed 4 cm inside the sill, so how far the tyre
+    // stuck out depended on how wide the tyre happened to be — and the wider the tyre, the
+    // further out it sat. On the mid-engined car, whose rear rubber is 30% wider, the rear
+    // tyres stood 12.3 cm proud of the bodywork against 8.5 cm at the front: not a stance,
+    // just lopsided. Fixing the OUTER FACE a set distance outside the body instead makes the
+    // overhang the same on both axles and on all four cars, and widening a tyre now grows it
+    // inboard, under the arch, where a wider tyre actually goes.
+    //
+    // Not flush: the body is a solid loft with no arch cut into it, so a tyre level with the
+    // skin would have its whole upper half swallowed and the wheel face with it. Three
+    // centimetres is enough to keep the face clear of the body when seen from the side.
+    // Both axles share ONE outer-face plane, taken from the wider of the two axle sections.
+    // Sizing each axle against its own section is defensible but does not look it: on the van
+    // the two differ by 4 cm, so the rears would tuck 2 cm further in than the fronts relative
+    // to the car's widest point, and in plan view that reads as a wonky track rather than as
+    // deliberate.
+    const WHEEL_PROUD_M = 0.03;
+    const wheelOuterX = Math.max(sections[1].wSill, sections[5].wSill) / 2 + WHEEL_PROUD_M;
+    const frontHalfTrack = wheelOuterX - wheelWidth / 2;
+    const rearHalfTrack = wheelOuterX - rearWheelWidth / 2;
 
     const wheelPositions = [
       [-frontHalfTrack, wheelRadius, frontAxleZ],
@@ -1279,9 +1308,6 @@ export class CarMeshBuilder {
     // a tyre 30% wider than they were, and the whole wheel came back as a plain black cylinder
     // while the front showed its spokes. Every part that has to stand proud of the tyre face
     // has to be told the same width.
-    const rearWheelWidth =
-      bodyStyle === "rally_hatch" || bodyStyle === "sport_mid" ? wheelWidth * 1.3 : wheelWidth;
-
     const tireMat = new THREE.MeshStandardMaterial({
       color: bodyStyle === "box_utility" ? "#262626" : "#18181b",
       roughness: 0.88,
@@ -1438,6 +1464,7 @@ export class CarMeshBuilder {
 
     return {
       carGroup,
+      chassisGroup,
       chassisMesh,
       glassMesh,
       wheelGroups,
