@@ -231,7 +231,13 @@ export class GameRenderer {
         __vbCamera?: THREE.Camera;
         __vbRenderer?: GameRenderer;
         __vbSpline?: TrackSpline;
+        __vbThree?: typeof THREE;
       };
+      // The library itself, so a diagnostic can build a Raycaster. Measuring where a wheel
+      // sits relative to the ROAD needs a ray against the road mesh — the car's contact plane
+      // is not the same surface once the road is cambered, and eyeballing a black tyre against
+      // black asphalt is how this bug survived two rounds of "verified".
+      w.__vbThree = THREE;
       w.__vbScene = this.scene;
       w.__vbCamera = this.camera;
       w.__vbRenderer = this;
@@ -637,7 +643,16 @@ export class GameRenderer {
       const cornerRoll = -s.steer * speedRatio * 0.042;
 
       this.carGroup.position.set(s.pos.x, s.pos.y, s.pos.z);
-      this.carGroup.rotation.set(s.pitch, s.heading, s.roll, "YXZ");
+      // NEGATED. The model's nose is +z, and a rotation of `a` about X sends a point at +z to
+      // y = -sin(a) — so a descending road, which reports a NEGATIVE pitch, needs a POSITIVE
+      // rotation to drop the nose. Applied unnegated the car leaned backwards into every
+      // gradient, which put the rear wheels into the surface and lifted the fronts off it.
+      // Measured against the road under each wheel, on the same frame:
+      //     +pitch  FL -34  FR -32  RL +21  RR +23   (mm below the road; negative is clear)
+      //     -pitch  FL  -6  FR  -5  RL  -6  RR  -4
+      // Render-only: `lastGround.roadPitch`, which the grade force reads, is untouched, so the
+      // re-simulation the leaderboard is validated against does not move.
+      this.carGroup.rotation.set(-s.pitch, s.heading, s.roll, "YXZ");
       if (this.carMeshResult) {
         this.carMeshResult.chassisGroup.rotation.set(pitchDive, 0, s.bodyRoll + cornerRoll);
       }

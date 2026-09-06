@@ -7,6 +7,7 @@
 import { VehicleModel, GroundQuery, Vec3 } from "./vehicle/VehicleModel";
 import { InputManager, InputAxes } from "./input/InputManager";
 import { TrackSpline, SplineSample, FrenetProjection } from "./track/TrackSpline";
+import { roadSurfaceRise } from "./track/RoadMesh";
 import { Timer, RunState, SplitRecord, PenaltyEvent } from "./timing/Timer";
 import { ReplayRecorder } from "./timing/ReplayRecorder";
 import { EngineAudio } from "./audio/EngineAudio";
@@ -257,10 +258,26 @@ export class Engine {
     if (this.spline) {
       const proj = this.spline.projectFrenet(interpolated.pos.x, interpolated.pos.z, this.cachedS);
       pitch = proj.sample.pitch;
-      roll = proj.sample.bank;
+      // THE DECK IS FLAT ACROSS ITS WIDTH, so there is no road roll for the car to follow.
+      //
+      // `sample.bank` exists and the physics uses it for lateral load, but RoadMesh never
+      // applies it to the driving surface: the lateral offsets are laid along the horizontal
+      // normal and only the small camber profile is rotated by it. Measured by raycasting the
+      // rendered road at the five most banked points on Borbera (bank -0.054 rad), the
+      // cross-fall over 4 m is 0 mm against the 216 mm a real bank would produce.
+      //
+      // Rolling the car by a bank the geometry does not have tilts it off a flat surface: 43 mm
+      // of air under one side and 44 mm of tyre buried on the other. If the deck is ever
+      // genuinely banked, this is the line that has to come back.
+      roll = 0;
       exposure = proj.sample.exposure;
       dropDepth = proj.sample.dropDepth;
-      interpolated.pos.y = proj.sample.y;
+      // ON the road, not in it. The deck is built clear of the terrain, so the surface the
+      // player sees is `sample.y + roadSurfaceRise(...)`; placing the car at `sample.y` buried
+      // every wheel by 70-128 mm, permanently, on all four cars — worse at the rear, where the
+      // car's own pitch adds to it. Render-only: the physics ground query below is unchanged,
+      // so the re-simulation the leaderboard is validated against is untouched.
+      interpolated.pos.y = proj.sample.y + roadSurfaceRise(proj.t, proj.sample.halfWidth);
     }
 
     // Audio Update

@@ -7,6 +7,29 @@ import { BuildingFootprint } from "./HamletBuilder";
 
 export { createTwoLaneRoadTexture };
 
+/**
+ * How far the road deck is built ABOVE the spline sample it is generated from.
+ *
+ * The ribbon is lifted clear of the terrain so the two cannot z-fight along a 3.7 km strip.
+ * That means `sample.y` is NOT the surface anyone drives on, and anything that positions
+ * something on the road has to add this back. The car did not: it was placed at `sample.y`
+ * exactly, so the wheels sat 70-128 mm inside the asphalt, permanently, on every car.
+ */
+export const ROAD_DECK_RISE = 0.08;
+
+/** Height of the crown at the centreline, falling to zero at each road edge. */
+const ROAD_CROWN = 0.025;
+
+/**
+ * Height of the driving surface above the spline sample, at a lateral offset from the
+ * centreline. Exported so the renderer and the mesh cannot drift apart — they were never
+ * connected before, which is how an 8 cm offset went unnoticed.
+ */
+export function roadSurfaceRise(lateral: number, halfWidth: number): number {
+  const across = Math.min(1, Math.abs(lateral) / Math.max(0.001, halfWidth));
+  return ROAD_DECK_RISE + ROAD_CROWN * (1 - across);
+}
+
 export class RoadMesh {
   public mesh: THREE.Group;
   public guardrailGroup: THREE.Group;
@@ -185,7 +208,7 @@ export class RoadMesh {
         -0.16, // verge drop
         -0.02,
         0.0,
-        0.025, // crown at center
+        ROAD_CROWN, // crown at center
         0.0,
         -0.02,
         -0.16, // verge drop
@@ -200,7 +223,7 @@ export class RoadMesh {
         const yOff = yOffsets[j];
 
         positions[vIdx * 3] = s.x + nx * off + upX * yOff;
-        positions[vIdx * 3 + 1] = s.y + upY * yOff + 0.08;
+        positions[vIdx * 3 + 1] = s.y + upY * yOff + ROAD_DECK_RISE;
         positions[vIdx * 3 + 2] = s.z + nz * off + upZ * yOff;
 
         normals[vIdx * 3] = upX;
