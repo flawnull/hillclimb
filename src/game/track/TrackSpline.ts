@@ -69,6 +69,16 @@ export interface SplineSample {
 export interface FrenetProjection {
   s: number;
   t: number;                 // signed lateral offset (+ is right of centerline, - is left)
+  /**
+   * Along-track position BEFORE clamping to the stage, so a caller can tell "at the start
+   * line" from "eighty metres behind it".
+   *
+   * `s` is clamped to [0, totalLength] and `t` measures ACROSS the road, so a car reversing
+   * straight back off the start line reports s = 0 and t = 0 — indistinguishable from sitting
+   * on the grid, however far out of the world it actually is. Longitudinal containment needs
+   * the unclamped value; nothing else in the projection carries it.
+   */
+  sUnclamped: number;
   sample: SplineSample;
   distSq: number;
 }
@@ -336,7 +346,7 @@ export class TrackSpline {
   public projectFrenet(x: number, z: number, cachedS: number = 0): FrenetProjection {
     const samples = this.samples;
     if (samples.length === 0) {
-      return { s: 0, t: 0, sample: this.getSampleAtS(0), distSq: 0 };
+      return { s: 0, t: 0, sUnclamped: 0, sample: this.getSampleAtS(0), distSq: 0 };
     }
 
     // Determine search window index around cachedS using exact binary search
@@ -400,12 +410,14 @@ export class TrackSpline {
     const tanX = bestSample.tangentX / horizTanLen;
     const tanZ = bestSample.tangentZ / horizTanLen;
     const tangentDist = dx * tanX + dz * tanZ;
-    const exactS = Math.max(0, Math.min(this.totalLength, bestSample.s + tangentDist));
+    const rawS = bestSample.s + tangentDist;
+    const exactS = Math.max(0, Math.min(this.totalLength, rawS));
     const smoothSample = this.getSampleAtS(exactS);
 
     return {
       s: exactS,
       t,
+      sUnclamped: rawS,
       sample: smoothSample,
       distSq: bestDistSq,
     };

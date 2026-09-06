@@ -11,6 +11,11 @@ import { Timer, RunState, SplitRecord, PenaltyEvent } from "./timing/Timer";
 import { ReplayRecorder } from "./timing/ReplayRecorder";
 import { EngineAudio } from "./audio/EngineAudio";
 import { WALL_CONTACT_MARGIN, PHYSICS_DT } from "./vehicle/vehicleTuning";
+
+/** Run-off allowed beyond either end of the timed stage, in metres, before the car is held.
+ *  Enough to back off the grid or coast past the finish line; not enough to drive out of the
+ *  built world, whose terrain and scenery stop not far past each end. */
+const STAGE_APRON_M = 12;
 import { PersonalBest } from "@/store/gameStore";
 
 export interface EngineRenderState {
@@ -286,6 +291,44 @@ export class Engine {
     return this.renderState;
   }
 
+  /**
+   * Holds the car inside the built world along the ROAD AXIS.
+   *
+   * Everything in the boundary code below this is LATERAL. `projectFrenet` reports `t` across
+   * the road and clamps `s` to the stage, so a car reversing straight back off the start line
+   * keeps t ~ 0 and s pinned at 0: it reads as dead centre on the road while it is a hundred
+   * metres outside the world, with the terrain skirts hanging in the sky above it. Measured
+   * before this existed, 144 m out in 25 s of reverse with the wall silent the whole way — a
+   * wall that only measures sideways cannot see a car leaving endways.
+   *
+   * IT LIVES HERE, NOT IN THE BOUNDARY BLOCK, because `stepPhysics` returns early for every
+   * timer state except 'running'. An earlier attempt at this removed the `running` gate from
+   * the two boundary branches, which changed nothing at all: that code is unreachable when
+   * the timer is not running regardless, so the gate was never what was stopping it. Called
+   * from the top of the step, it also covers the post-finish coast, where the car is still
+   * moving and the boundary code is likewise skipped.
+   *
+   * Deliberately unscored. This is the edge of the map, not a rock face: a player who backs
+   * off the grid should be stopped, not billed.
+   */
+  private applyStageBounds(): void {
+    if (!this.spline) return;
+    const p = this.spline.projectFrenet(this.vehicle.state.pos.x, this.vehicle.state.pos.z, this.cachedS);
+    const overBehind = -p.sUnclamped;
+    const overPast = p.sUnclamped - this.spline.totalLength;
+    const overshoot = Math.max(overBehind, overPast);
+    if (overshoot <= STAGE_APRON_M) return;
+
+    const end = p.sample;
+    const tanLen = Math.hypot(end.tangentX, end.tangentZ) || 1;
+    // Points back INTO the stage: forward at the start, backward at the finish.
+    const inward = overBehind > overPast ? 1 : -1;
+    const tx = (end.tangentX / tanLen) * inward;
+    const tz = (end.tangentZ / tanLen) * inward;
+    const push = overshoot - STAGE_APRON_M;
+    this.vehicle.applyWallCollision(tx, tz, tx * push, tz * push, false);
+  }
+
   private stepPhysics(dt: number, inputAxes: InputAxes, enableAssist: boolean): void {
     // Handle countdown phase
     if (this.timer.state.startsWith('countdown_')) {
@@ -298,6 +341,10 @@ export class Engine {
       }
       return;
     }
+
+    // Before anything else: the car must be inside the world in every state where it can
+    // still move, which includes the post-finish coast below.
+    this.applyStageBounds();
 
     // AFTER THE FINISH the car rolls to a halt rather than being abandoned mid-stride.
     //
