@@ -332,17 +332,28 @@ export class CarMeshBuilder {
     // surfaces have something to sample. That is an extra full pass per frame to look through
     // a window at a car interior this model does not have. Tinted, sharply reflective glass
     // over a dark cabin reads the same from outside and costs a normal blended draw.
+    // THE INTERIOR LOOKED EXPOSED BECAUSE THE GLASS WAS TOO BRIGHT, NOT TOO CLEAR.
+    //
+    // The obvious reading is that a pale cabin shows through, so the tint should be heavier.
+    // It is the other way round. Painting the interior magenta and rendering it proves it: the
+    // cabin comes back PALE PINK, not magenta, so most of those pixels are the glass, not what
+    // is behind it. At `envMapIntensity: 1.9` with full clearcoat and reflectivity the screens
+    // were a near-mirror of a bright sky, and raising opacity only handed that bright layer a
+    // larger share — the interior got harder to see, and the greenhouse got paler.
+    //
+    // Dropping the reflection lets the tint carry. What shows through then is a dark cabin,
+    // which is what reads as depth; the sheen stays as a highlight rather than a wash.
     const glassMat = new THREE.MeshPhysicalMaterial({
-      color: "#0d1a26",
-      roughness: 0.03,
+      color: "#0a1018",
+      roughness: 0.05,
       metalness: 0.0,
-      reflectivity: 1.0,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.02,
+      reflectivity: 0.5,
+      clearcoat: 0.45,
+      clearcoatRoughness: 0.06,
       transparent: true,
-      opacity: 0.62,
+      opacity: 0.72,
       envMap,
-      envMapIntensity: 1.9,
+      envMapIntensity: 0.55,
     });
 
     // 2. Body Sections
@@ -466,6 +477,20 @@ export class CarMeshBuilder {
       return (s.wBelt + (s.wTop - s.wBelt) * t) / 2;
     };
 
+    /** Roofline height at an arbitrary z, interpolated between the sections either side.
+     *  Anything mounted ON the body needs the surface it stands on, not a constant. */
+    const deckHeightAt = (z: number): number => {
+      for (let k = 0; k < sections.length - 1; k++) {
+        const a = sections[k];
+        const b = sections[k + 1];
+        if (z <= a.z && z >= b.z) {
+          const t = (z - a.z) / (b.z - a.z);
+          return a.yTop + (b.yTop - a.yTop) * t;
+        }
+      }
+      return z > sections[0].z ? sections[0].yTop : sections[sections.length - 1].yTop;
+    };
+
     const rings: Pt2[][] = sections.map(halfRing);
     const at = (k: number, i: number): Pt3 => ({ x: rings[k][i].x, y: rings[k][i].y, z: sections[k].z });
 
@@ -555,16 +580,33 @@ export class CarMeshBuilder {
     // should be. Dropped below, the screens look onto its unlit faces instead.
     const cabinTop = Math.min(sections[3].yTop, sections[4].yTop) - 0.07;
     const cabinBase = sections[3].yBelt;
+    const cabinW = Math.min(sections[3].wTop, sections[4].wTop) - 0.05;
+    // UNLIT ON PURPOSE. A lit box has a top face, and the sun finds it through the backlight:
+    // however dark the colour, a horizontal surface in full sun comes back as mid-grey and
+    // reads as a slab sitting where the interior should be. A car interior is in shadow at all
+    // times, so `MeshBasicMaterial` is not a shortcut here — it is the correct response to the
+    // light. It still takes fog, so it recedes with the rest of the car.
+    const cabinMat = new THREE.MeshBasicMaterial({ color: "#0c0f13" });
     const cabin = new THREE.Mesh(
-      new THREE.BoxGeometry(
-        Math.min(sections[3].wTop, sections[4].wTop) - 0.05,
-        cabinTop - cabinBase,
-        Math.abs(cabinFrontZ - cabinRearZ)
-      ),
-      new THREE.MeshStandardMaterial({ color: "#0a0c0f", roughness: 1.0, metalness: 0.0 })
+      new THREE.BoxGeometry(cabinW, cabinTop - cabinBase, Math.abs(cabinFrontZ - cabinRearZ)),
+      cabinMat
     );
     cabin.position.set(0, (cabinTop + cabinBase) / 2, (cabinFrontZ + cabinRearZ) / 2);
     chassisGroup.add(cabin);
+
+    // Two seat backs standing proud of it. A single box behind tinted glass is a flat wall
+    // wherever the light hits it; a couple of shapes at different depths give the parallax
+    // that makes a cabin look occupied without modelling an interior anyone can resolve.
+    const seatGeo = new THREE.BoxGeometry(cabinW * 0.34, (cabinTop - cabinBase) * 0.85, 0.10);
+    for (const side of [-1, 1]) {
+      const seat = new THREE.Mesh(seatGeo, cabinMat);
+      seat.position.set(
+        side * cabinW * 0.24,
+        (cabinTop + cabinBase) / 2 + 0.03,
+        (cabinFrontZ + cabinRearZ) / 2 + 0.06
+      );
+      chassisGroup.add(seat);
+    }
 
     const frontZ = sections[0].z;
     const rearZ = sections[sections.length - 1].z;
@@ -661,13 +703,21 @@ export class CarMeshBuilder {
       scoop.position.set(0, sections[3].yTop + 0.06, 0.0);
       chassisGroup.add(scoop);
 
+      // Behind the rear wheel and hanging DOWN from the arch. They used to sit outboard of
+      // the sill at y = 0.04, which put their lower half below the road and left them reading
+      // as red panels floating beside the car.
       const flapMat = new THREE.MeshStandardMaterial({ color: "#dc2626", roughness: 0.5 });
-      const flapGeo = new THREE.BoxGeometry(0.24, 0.28, 0.02);
-      const flapL = new THREE.Mesh(flapGeo, flapMat);
-      flapL.position.set(-sections[5].wSill / 2 - 0.02, 0.04, sections[5].z - 0.18);
-      const flapR = new THREE.Mesh(flapGeo, flapMat);
-      flapR.position.set(sections[5].wSill / 2 + 0.02, 0.04, sections[5].z - 0.18);
-      chassisGroup.add(flapL, flapR);
+      const flapGeo = new THREE.BoxGeometry(0.24, 0.26, 0.02);
+      for (const side of [-1, 1]) {
+        const flap = new THREE.Mesh(flapGeo, flapMat);
+        flap.position.set(
+          side * (sections[5].wSill / 2 - 0.06),
+          // chassisGroup is lifted onto the suspension, so y = 0 here is not the road.
+          0.15 - chassisGroup.position.y + 0.13,
+          sections[5].z - 0.30
+        );
+        chassisGroup.add(flap);
+      }
     } else if (bodyStyle === "box_utility") {
       const bullBar = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.28, 0.08), trimMat);
       bullBar.position.set(0, 0.32, frontZ + 0.05);
@@ -754,40 +804,97 @@ export class CarMeshBuilder {
     // y = 0.46 — the top third of it sat at a height where the bodywork has no material at
     // all, hanging in open air beside the car. Under roll it swings clear of the silhouette
     // and reads as a bite taken out of the rear quarter.
+    // THE WHOLE CLUSTER IS LAID OUT AGAINST THE TAIL'S HEIGHT, TOP DOWN.
+    //
+    // The four tails are not the same depth: the van's runs 0.18 m to 0.56 m, the mid-engined
+    // car's only 0.12 m to 0.46 m. A lamp housing and a number plate at fixed sizes do not
+    // both fit in 0.34 m, which is how the exhaust tips ended up crossing the plate on the
+    // blue car. Sizing each feature as a fraction of the tail and stacking them from the deck
+    // edge downwards makes the layout hold on all four.
     const rearSection = sections[sections.length - 1];
     const LAMP_CLEARANCE = 0.03;
-    const lampRadius = 0.09;
-    // Drop the band until a lamp of that radius clears the deck edge.
-    const lampY = Math.min(0.44, rearSection.yTop - lampRadius - 0.02);
-    // Measured at the band's full vertical extent, so the narrowest point still fits.
+    const tailBottom = rearSection.ySill;
+    const tailHeight = rearSection.yTop - tailBottom;
+
+    const lampRadius = Math.min(0.09, tailHeight * 0.20);
+    const housingHalfH = lampRadius + Math.min(0.024, tailHeight * 0.05);
+    const plateH = Math.min(0.12, tailHeight * 0.30);
+    const plateRecessH = plateH + 0.045;
+
+    const lampY = Math.min(0.44, rearSection.yTop - housingHalfH - 0.012);
+    // Measured at the housing's full vertical extent, so its narrowest point still fits.
     const lampHalfSpan =
       Math.min(
-        halfWidthAt(rearSection, lampY - lampRadius),
-        halfWidthAt(rearSection, lampY + lampRadius)
+        halfWidthAt(rearSection, lampY - housingHalfH),
+        halfWidthAt(rearSection, lampY + housingHalfH)
       ) - LAMP_CLEARANCE;
-    const lampOffsetX = Math.min(0.56, lampHalfSpan - lampRadius);
+    const lampOffsetX = Math.min(0.56, lampHalfSpan - lampRadius - 0.02);
 
-    const tlHousing = new THREE.Mesh(
-      new THREE.BoxGeometry(lampHalfSpan * 2, 0.12, 0.055),
-      seamMat
-    );
-    tlHousing.position.set(0, lampY, rearZ - 0.026);
+    // THE HOUSING IS EXTRUDED WITH THE LENS OPENINGS CUT OUT OF IT.
+    //
+    // A box with cylinders laid on top of it is two primitives sharing a volume, and it reads
+    // as exactly that: the round lenses poked out above and below the bar's edges with a hard
+    // intersection line across them, because nothing was actually cut. `Shape` takes holes and
+    // `ExtrudeGeometry` triangulates around them, so the openings are real: the lens sits
+    // INSIDE the trim, its rim hidden by the housing wall, which is what makes it read as a
+    // light unit rather than a sticker with a disc on it.
+    //
+    // The bar's own aperture is cut the same way, so the whole cluster is one dark surface
+    // with three windows in it.
+    const barHalfH = Math.max(0.022, housingHalfH - 0.048);
+    const barHalfW = Math.max(0.12, lampOffsetX - lampRadius - 0.035);
+
+    const housingShape = new THREE.Shape();
+    housingShape.moveTo(-lampHalfSpan, -housingHalfH);
+    housingShape.lineTo(lampHalfSpan, -housingHalfH);
+    housingShape.lineTo(lampHalfSpan, housingHalfH);
+    housingShape.lineTo(-lampHalfSpan, housingHalfH);
+    housingShape.closePath();
+
+    for (const side of [-1, 1]) {
+      const hole = new THREE.Path();
+      hole.absarc(side * lampOffsetX, 0, lampRadius, 0, Math.PI * 2, true);
+      housingShape.holes.push(hole);
+    }
+    const barHole = new THREE.Path();
+    barHole.moveTo(-barHalfW, -barHalfH);
+    barHole.lineTo(-barHalfW, barHalfH);
+    barHole.lineTo(barHalfW, barHalfH);
+    barHole.lineTo(barHalfW, -barHalfH);
+    barHole.closePath();
+    housingShape.holes.push(barHole);
+
+    const housingGeo = new THREE.ExtrudeGeometry(housingShape, {
+      depth: 0.055,
+      bevelEnabled: false,
+      curveSegments: 14,
+    });
+    // Extrude runs along +z from the shape plane; put the mouth at the back of the car.
+    housingGeo.translate(0, 0, -0.055);
+    const tlHousing = new THREE.Mesh(housingGeo, seamMat);
+    tlHousing.position.set(0, lampY, rearZ - 0.002);
     chassisGroup.add(tlHousing);
 
-    const tlBarGeo = new THREE.BoxGeometry(lampHalfSpan * 2 - 0.08, 0.07, 0.035);
     const tlMat = lampMat("#ef4444", "#7f1d1d", 1.0);
     tlMat.roughness = 0.2;
-    const tlBar = new THREE.Mesh(tlBarGeo, tlMat);
-    tlBar.position.set(0, lampY, rearZ - 0.022);
+
+    // Lenses are set back inside their openings rather than laid over the trim, so the
+    // housing wall shades them at the edge.
+    const lensZ = rearZ - 0.040;
+    const tlBar = new THREE.Mesh(
+      new THREE.BoxGeometry(barHalfW * 2 - 0.004, barHalfH * 2 - 0.004, 0.02),
+      tlMat
+    );
+    tlBar.position.set(0, lampY, lensZ);
     chassisGroup.add(tlBar);
 
-    const tlRoundGeo = new THREE.CylinderGeometry(lampRadius, lampRadius, 0.035, 14);
+    const tlRoundGeo = new THREE.CylinderGeometry(lampRadius - 0.004, lampRadius - 0.004, 0.02, 14);
     const tlL = new THREE.Mesh(tlRoundGeo, tlMat);
     tlL.rotation.x = Math.PI / 2;
-    tlL.position.set(-lampOffsetX, lampY, rearZ - 0.032);
+    tlL.position.set(-lampOffsetX, lampY, lensZ);
     const tlR = new THREE.Mesh(tlRoundGeo, tlMat);
     tlR.rotation.x = Math.PI / 2;
-    tlR.position.set(lampOffsetX, lampY, rearZ - 0.032);
+    tlR.position.set(lampOffsetX, lampY, lensZ);
     chassisGroup.add(tlL, tlR);
     brakeLightMeshes.push(tlBar, tlL, tlR);
     tailPanelMeshes.push(tlHousing, tlBar, tlL, tlR);
@@ -834,15 +941,17 @@ export class CarMeshBuilder {
     tailPanelMeshes.push(revL, revR);
 
     // License Plate, sunk into a dark surround by the same bezel trick as the lamps.
-    // Sits under the lamp band and above the bumper's lower edge, wherever those land.
+    // Stacked directly beneath the housing, then pushed back up if that would hang it below
+    // the tail's lower edge. On a shallow tail the two clamps meet, which is the tightest the
+    // panel can be packed and still hold both features.
     const plateY = Math.max(
-      rearSection.ySill + 0.09,
-      Math.min(0.28, lampY - lampRadius - 0.045)
+      tailBottom + plateRecessH / 2 + 0.005,
+      lampY - housingHalfH - 0.014 - plateRecessH / 2
     );
-    const plateRecess = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.17, 0.04), seamMat);
+    const plateRecess = new THREE.Mesh(new THREE.BoxGeometry(0.50, plateRecessH, 0.04), seamMat);
     plateRecess.position.set(0, plateY, rearZ - 0.018);
     const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.44, 0.12),
+      new THREE.PlaneGeometry(0.44, plateH),
       new THREE.MeshStandardMaterial({
         map: CarMeshBuilder.getPlateTexture(),
         roughness: 0.45,
@@ -879,20 +988,39 @@ export class CarMeshBuilder {
       return group;
     };
 
+    // Tips are kept clear of the plate SIDEWAYS, not by height.
+    //
+    // The twin pipes sat at x = +/-0.08, directly under the plate's centre, and on the blue
+    // car the plate had to drop far enough down the shallow tail that the tips crossed
+    // straight through it. There is no height that works on every tail — the plate moves with
+    // the panel — but there is always room outboard of a 0.44 m plate, so that is where they
+    // go. `exhaustClearX` is the first x at which a tip of that radius cannot touch it.
+    const plateHalfWidth = 0.25;
+    const exhaustClearX = (radius: number) => plateHalfWidth + radius + 0.05;
+    const exhaustY = Math.max(tailBottom + 0.03, plateY - plateRecessH / 2 - 0.02);
+
+    // Short, and mostly buried. A tip that stands 0.2 m clear of the bumper is a chrome rod
+    // hanging in space; the visible part should be about a hand's width. `pipeZ` puts the
+    // pipe's mouth at rearZ + 0.02 - length, i.e. just the last few centimetres showing.
+    const pipeZ = (length: number) => rearZ + 0.02 - length / 2;
+
     if (bodyStyle === "sport_mid") {
-      for (const side of [-0.08, 0.08]) {
-        const pipe = makeExhaust(0.04, 0.20);
-        pipe.position.set(side, 0.18, rearZ - 0.10);
+      const r = 0.04;
+      for (const side of [-1, 1]) {
+        const pipe = makeExhaust(r, 0.16);
+        pipe.position.set(side * exhaustClearX(r), exhaustY, pipeZ(0.16));
         chassisGroup.add(pipe);
       }
     } else if (bodyStyle === "rally_hatch") {
-      const pipe = makeExhaust(0.065, 0.24);
-      pipe.position.set(-0.48, 0.16, rearZ - 0.12);
+      const r = 0.065;
+      const pipe = makeExhaust(r, 0.18);
+      pipe.position.set(-Math.max(0.48, exhaustClearX(r)), exhaustY, pipeZ(0.18));
       chassisGroup.add(pipe);
     } else {
+      const r = 0.045;
       for (const side of [-1, 1]) {
-        const pipe = makeExhaust(0.045, 0.22);
-        pipe.position.set(0.42 * side, 0.16, rearZ - 0.10);
+        const pipe = makeExhaust(r, 0.18);
+        pipe.position.set(side * Math.max(0.42, exhaustClearX(r)), exhaustY, pipeZ(0.18));
         chassisGroup.add(pipe);
       }
     }
@@ -913,16 +1041,49 @@ export class CarMeshBuilder {
     // Spoilers
     let spoilerGroup: THREE.Group | null = null;
     if (bodyStyle === "rally_hatch") {
+      // THE WING IS BOLTED TO THE DECKLID, NOT FLOATED ABOVE IT.
+      //
+      // The mount was `sections[3].yTop + 0.08` — the height of the ROOF, at a z that is
+      // most of a metre behind the roof, where the body has already dropped away. The strut
+      // feet ended up 0.15 m clear of the decklid with nothing under them, so the aero read
+      // as two blocks and a plank hanging in the air behind the car.
+      const mountZ = rearZ + 0.15;
       spoilerGroup = new THREE.Group();
-      spoilerGroup.position.set(0, sections[3].yTop + 0.08, rearZ + 0.15);
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(1.60, 0.06, 0.35), secondaryMat);
-      wing.position.set(0, 0.28, 0);
+      spoilerGroup.position.set(0, deckHeightAt(mountZ), mountZ);
+
+      // A slab has no leading edge, so it cannot read as a wing from any angle. This is a
+      // cambered wedge: thick a little way back from the leading edge, tapering to a thin
+      // trailing edge, extruded across the span and set at a few degrees of incidence.
+      const chord = 0.36;
+      const span = 1.60;
+      const foil = new THREE.Shape();
+      foil.moveTo(0, -0.010);
+      foil.lineTo(0.075, -0.034);
+      foil.lineTo(chord, -0.004);
+      foil.lineTo(chord, 0.006);
+      foil.lineTo(0.075, 0.028);
+      foil.closePath();
+      const wingGeo = new THREE.ExtrudeGeometry(foil, { depth: span, bevelEnabled: false });
+      // Centre it, then swing the extrusion axis from z onto x so the span runs across the
+      // car and the chord runs fore-and-aft.
+      wingGeo.translate(-chord / 2, 0, -span / 2);
+      wingGeo.rotateY(Math.PI / 2);
+      const wing = new THREE.Mesh(wingGeo, secondaryMat);
+      wing.position.set(0, 0.30, 0);
+      wing.rotation.x = -0.13;
       wing.castShadow = true;
-      const strutL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.32, 0.15), trimMat);
-      strutL.position.set(-0.55, 0.14, 0);
-      const strutR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.32, 0.15), trimMat);
-      strutR.position.set(0.55, 0.14, 0);
-      spoilerGroup.add(wing, strutL, strutR);
+
+      const strutGeo = new THREE.BoxGeometry(0.05, 0.30, 0.15);
+      const footGeo = new THREE.BoxGeometry(0.13, 0.018, 0.21);
+      for (const side of [-1, 1]) {
+        const strut = new THREE.Mesh(strutGeo, trimMat);
+        strut.position.set(side * 0.55, 0.15, 0);
+        // The baseplate is what makes it look bolted on rather than pushed through.
+        const foot = new THREE.Mesh(footGeo, trimMat);
+        foot.position.set(side * 0.55, 0.009, 0);
+        spoilerGroup.add(strut, foot);
+      }
+      spoilerGroup.add(wing);
       chassisGroup.add(spoilerGroup);
     } else if (bodyStyle === "coupe") {
       const ducktail = new THREE.Mesh(new THREE.BoxGeometry(1.44, 0.08, 0.18), secondaryMat);
@@ -1053,15 +1214,36 @@ export class CarMeshBuilder {
       [rearHalfTrack, wheelRadius, rearAxleZ],
     ];
 
-    const tireGeo = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelWidth, 24);
+    // Wheel parts are built PER AXLE, from that axle's own width.
+    //
+    // The driven axle runs wider rubber, and when only the tyre knew that the rim, lip, spokes
+    // and cap were all still built to the front width — so on the rear they sat buried inside
+    // a tyre 30% wider than they were, and the whole wheel came back as a plain black cylinder
+    // while the front showed its spokes. Every part that has to stand proud of the tyre face
+    // has to be told the same width.
+    const rearWheelWidth =
+      bodyStyle === "rally_hatch" || bodyStyle === "sport_mid" ? wheelWidth * 1.3 : wheelWidth;
+
     const tireMat = new THREE.MeshStandardMaterial({
       color: bodyStyle === "box_utility" ? "#262626" : "#18181b",
       roughness: 0.88,
       metalness: 0.1,
     });
+    /** A shade lighter than the sidewall. From the chase camera the rear tyres are seen tread-
+     *  on, and a single flat black made them read as featureless slabs. */
+    const treadMat = new THREE.MeshStandardMaterial({
+      color: bodyStyle === "box_utility" ? "#33322f" : "#242428",
+      roughness: 0.95,
+      metalness: 0.05,
+    });
 
+    // THE SPOKES WERE THE SAME MATERIAL AS THE DISC THEY SAT ON.
+    //
+    // A bright cylinder at 0.68R with bright spokes laid over it has nothing to read against:
+    // the whole wheel centre resolved to one silver disc, and against a black tyre the pair
+    // collapsed into a single dark cylinder at any distance. A wheel reads as a wheel because
+    // the spokes are LIGHT and the disc behind them is DARK, with a bright lip at the rim.
     const rimColor = bodyStyle === "rally_hatch" ? "#ffffff" : bodyStyle === "sport_mid" ? "#e2e8f0" : "#f1f5f9";
-    const rimGeo = new THREE.CylinderGeometry(wheelRadius * 0.68, wheelRadius * 0.68, wheelWidth + 0.012, 16);
     const rimMat = new THREE.MeshStandardMaterial({
       color: rimColor,
       metalness: 0.88,
@@ -1069,11 +1251,47 @@ export class CarMeshBuilder {
       envMap,
       envMapIntensity: 1.1,
     });
-
-    const hubGeo = new THREE.CylinderGeometry(wheelRadius * 0.22, wheelRadius * 0.22, wheelWidth + 0.016, 12);
+    const dishMat = new THREE.MeshStandardMaterial({
+      color: "#20242b",
+      metalness: 0.7,
+      roughness: 0.5,
+      envMap,
+      envMapIntensity: 0.7,
+    });
     const hubMat = new THREE.MeshStandardMaterial({ color: "#0f172a", metalness: 0.9, roughness: 0.2 });
 
-    const spokeGeo = new THREE.BoxGeometry(wheelRadius * 0.08, wheelRadius * 1.25, wheelWidth + 0.014);
+    interface WheelParts {
+      tire: THREE.CylinderGeometry;
+      tread: THREE.CylinderGeometry;
+      barrel: THREE.CylinderGeometry;
+      lip: THREE.CylinderGeometry;
+      hub: THREE.CylinderGeometry;
+      cap: THREE.CylinderGeometry;
+      spoke: THREE.BoxGeometry;
+    }
+
+    const makeWheelParts = (width: number): WheelParts => ({
+      tire: new THREE.CylinderGeometry(wheelRadius, wheelRadius, width, 24),
+      tread: new THREE.CylinderGeometry(wheelRadius * 1.004, wheelRadius * 1.004, width * 0.82, 24, 1, true),
+      // Solid, not a band: an open cylinder would show the inside of the far side of the
+      // wheel between the spokes, because back faces are culled.
+      barrel: new THREE.CylinderGeometry(wheelRadius * 0.70, wheelRadius * 0.70, width + 0.004, 20),
+      // The bright ring that separates rim from tyre.
+      lip: new THREE.CylinderGeometry(wheelRadius * 0.745, wheelRadius * 0.745, width + 0.016, 20, 1, true),
+      hub: new THREE.CylinderGeometry(wheelRadius * 0.22, wheelRadius * 0.22, width * 0.7, 12),
+      cap: new THREE.CylinderGeometry(wheelRadius * 0.17, wheelRadius * 0.17, width + 0.044, 12),
+      // THE SPOKES WERE NOT SPOKE-SHAPED. The box was
+      //   (0.08R along the axle) x (1.25R radial) x (wheelWidth across)
+      // and `wheelWidth` is 0.84R here, so each "spoke" was a slab covering most of the wheel
+      // face and a handful of them rotated about the axle tiled the disc solid. That, more
+      // than the colour, is why the wheel resolved to one flat cylinder. A spoke is long
+      // radially and NARROW tangentially, and wider along the axle than the disc behind it or
+      // it is buried inside the rim.
+      spoke: new THREE.BoxGeometry(width + 0.030, wheelRadius * 1.38, wheelRadius * 0.13),
+    });
+
+    const frontWheel = makeWheelParts(wheelWidth);
+    const rearWheel = wheelWidth === rearWheelWidth ? frontWheel : makeWheelParts(rearWheelWidth);
 
     const caliperGeo = new THREE.BoxGeometry(0.08, wheelRadius * 0.45, 0.11);
     const caliperMat = new THREE.MeshStandardMaterial({
@@ -1089,14 +1307,27 @@ export class CarMeshBuilder {
       pivotGroup.position.set(wheelPositions[i][0], wheelPositions[i][1], wheelPositions[i][2]);
 
       const spinGroup = new THREE.Group();
-      const tire = new THREE.Mesh(tireGeo, tireMat);
+      // Wider rubber on the driven axle. Seen tread-on from the chase camera, a narrow rear
+      // tyre is most of what makes a rally car look under-tyred from behind.
+      const parts = i >= 2 ? rearWheel : frontWheel;
+
+      const tire = new THREE.Mesh(parts.tire, tireMat);
       tire.rotation.z = Math.PI / 2;
       tire.castShadow = true;
 
-      const rim = new THREE.Mesh(rimGeo, rimMat);
-      rim.rotation.z = Math.PI / 2;
+      const tread = new THREE.Mesh(parts.tread, treadMat);
+      tread.rotation.z = Math.PI / 2;
 
-      const hub = new THREE.Mesh(hubGeo, hubMat);
+      const barrel = new THREE.Mesh(parts.barrel, dishMat);
+      barrel.rotation.z = Math.PI / 2;
+
+      const cap = new THREE.Mesh(parts.cap, rimMat);
+      cap.rotation.z = Math.PI / 2;
+
+      const lip = new THREE.Mesh(parts.lip, rimMat);
+      lip.rotation.z = Math.PI / 2;
+
+      const hub = new THREE.Mesh(parts.hub, hubMat);
       hub.rotation.z = Math.PI / 2;
 
       const discMat = new THREE.MeshBasicMaterial({ color: "#475569" });
@@ -1104,11 +1335,11 @@ export class CarMeshBuilder {
       disc.rotation.z = Math.PI / 2;
       brakeDiscs.push(disc);
 
-      spinGroup.add(tire, rim, hub, disc);
+      spinGroup.add(tire, tread, barrel, lip, hub, cap, disc);
 
       const numSpokes = bodyStyle === "rally_hatch" ? 3 : bodyStyle === "sport_mid" ? 5 : 4;
       for (let s = 0; s < numSpokes; s++) {
-        const spoke = new THREE.Mesh(spokeGeo, rimMat);
+        const spoke = new THREE.Mesh(parts.spoke, rimMat);
         spoke.rotation.x = (s * Math.PI) / numSpokes;
         spinGroup.add(spoke);
       }

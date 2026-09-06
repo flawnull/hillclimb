@@ -13,6 +13,11 @@ import { createHeightField, type HeightField } from "../track/terrain/heightFiel
 import type { BuildingFootprint } from "../track/HamletBuilder";
 import { QualityTier } from "@/store/gameStore";
 import { pixelRatioFor, shouldAntialias } from "./pixelBudget";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+
 import { CarMeshBuilder, CarMeshResult } from "./CarMeshBuilder";
 import { ChaseCameraController } from "./ChaseCameraController";
 import { EffectsManager } from "./EffectsManager";
@@ -114,6 +119,8 @@ export class GameRenderer {
   private lowFpsTimer = 0;
   private highFpsTimer = 0;
   private currentDprScale = 1.0;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
   private qualityTier: QualityTier = "high";
   /**
    * Ring buffer of recent frame times, milliseconds. The auto-scaler judges on the MEDIAN of
@@ -487,12 +494,14 @@ export class GameRenderer {
     this.renderer.setSize(width, height, false);
     // The budget is an area, so resizing the window changes the ratio it allows.
     this.renderer.setPixelRatio(this.targetPixelRatio() * this.currentDprScale);
+    this.syncComposer();
   };
 
   public setQualityTier(tier: QualityTier): void {
     this.qualityTier = tier;
     this.renderer.setPixelRatio(this.targetPixelRatio() * this.currentDprScale);
     this.renderer.shadowMap.enabled = tier !== "low";
+    this.syncComposer();
   }
 
   /**
@@ -507,6 +516,10 @@ export class GameRenderer {
    */
   private applyPixelRatio(ratio: number): void {
     this.renderer.setPixelRatio(ratio);
+    // The post chain owns render targets sized off the drawing buffer, and the scaler's whole
+    // purpose is to shrink that buffer when frames are late. Re-syncing here is also what
+    // drops bloom entirely the first time the scaler goes below native.
+    this.syncComposer();
     this.frameMsFilled = 0;
     this.frameMsWrite = 0;
     this.dprCooldown = DPR_CHANGE_COOLDOWN_S;
@@ -672,7 +685,10 @@ export class GameRenderer {
         // why there is no bloom post-pass — see CarMeshBuilder.
         for (const glow of this.carMeshResult.brakeGlowMeshes) {
           const mat = glow.material as THREE.MeshBasicMaterial;
-          const target = isBraking ? 0.85 : 0.0;
+          // Half what it was: the bloom pass now supplies most of the halo on the high tier,
+          // and the two together blew the lamps out to white. The quad still carries it on
+          // its own where bloom is off, which is every tier below high.
+          const target = isBraking ? 0.38 : 0.0;
           if (mat.opacity !== target) {
             mat.opacity += (target - mat.opacity) * Math.min(1, deltaSeconds * 18);
             if (Math.abs(target - mat.opacity) < 0.004) mat.opacity = target;
@@ -734,7 +750,7 @@ export class GameRenderer {
       this.cameraController.update(this.camera, this.scene, this.dirLight, s, deltaSeconds);
 
       // 9. Render Scene
-      this.renderer.render(this.scene, this.camera);
+      this.renderFrame();
 
       // 10. Dynamic Quality Auto-Scaler
       //
@@ -827,8 +843,63 @@ export class GameRenderer {
   }
 
   /** Render a single frame without advancing physics. Used by visual diagnostics. */
+  /**
+   * Whether the bloom chain should be running.
+   *
+   * Bloom is a full-screen cost — a bright-pass plus five blur mip levels plus a composite,
+   * every frame, over the whole drawing buffer — and this project is fill-rate bound before
+   * it is anything else. So it is not offered on the lower quality tiers, and it switches
+   * itself off the moment the adaptive resolution scaler has had to drop below native: a
+   * machine that cannot hold the frame rate at full resolution has no business spending
+   * milliseconds on a halo. That check is what keeps this from undoing the frame budget.
+   */
+  private bloomWanted(): boolean {
+    return this.qualityTier === "high" && this.currentDprScale >= 0.999;
+  }
+
+  /** Builds or tears down the post chain to match `bloomWanted()`, and keeps it sized. */
+  private syncComposer(): void {
+    const want = this.bloomWanted();
+    if (!want) {
+      if (this.composer) {
+        this.composer.dispose();
+        this.composer = null;
+        this.bloomPass = null;
+      }
+      return;
+    }
+
+    const width = this.canvas.clientWidth || 1;
+    const height = this.canvas.clientHeight || 1;
+
+    if (!this.composer) {
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      // Threshold is in LINEAR light, not in sRGB: three turns off the materials' own tone
+      // mapping when it renders into a target, so the composer sees the raw values. Sunlit
+      // white bodywork lands near 1.0, so the cut sits above that and only the lamps — whose
+      // emissive runs to 3.0 — actually pass it. Strength and radius are deliberately modest;
+      // this is meant to make the brake lights radiate, not to fog the screen.
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.45, 0.4, 1.15);
+      this.composer.addPass(this.bloomPass);
+      // Applies tone mapping and the output colour space, which the materials no longer do
+      // for themselves once there is a render target in the way.
+      this.composer.addPass(new OutputPass());
+    }
+
+    this.composer.setPixelRatio(this.renderer.getPixelRatio());
+    this.composer.setSize(width, height);
+    this.bloomPass?.setSize(width, height);
+  }
+
+  private renderFrame(): void {
+    if (this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
+  }
+
   public renderOnce(): void {
-    this.renderer.render(this.scene, this.camera);
+    this.syncComposer();
+    this.renderFrame();
   }
 
   public stop(): void {
@@ -840,6 +911,9 @@ export class GameRenderer {
 
   public destroy(): void {
     this.stop();
+    this.composer?.dispose();
+    this.composer = null;
+    this.bloomPass = null;
     window.removeEventListener("resize", this.handleResize);
 
     // `WebGLRenderer.dispose()` below only frees the renderer's own GPU-side program and

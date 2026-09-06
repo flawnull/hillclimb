@@ -230,6 +230,68 @@ describe("Car model", () => {
     }
   });
 
+  it("tail panel features do not intersect one another", () => {
+    // The twin exhaust tips ran straight through the bottom of the number plate on the blue
+    // car: the tail is only 0.34 m deep, so a fixed-size lamp housing and plate crowded the
+    // plate down onto pipes that sat under its centre. Overhang is not the only way parts go
+    // wrong on a flat panel — they can also simply occupy the same space.
+    for (const v of ALL_VARIANTS) {
+      const result = CarMeshBuilder.buildCarModel(CAR_DEFS[v.id], v.colorIndex);
+      result.carGroup.updateMatrixWorld(true);
+
+      const shellBox = new THREE.Box3().setFromObject(result.chassisMesh);
+
+      // Everything mounted at the tail: the panel features plus the tailpipes, which are the
+      // meshes that sit behind the closing cap.
+      const parts: { name: string; box: THREE.Box3 }[] = [];
+      for (const part of result.tailPanelMeshes) {
+        part.geometry.computeBoundingBox();
+        parts.push({
+          name: part.geometry.type,
+          box: part.geometry.boundingBox!.clone().applyMatrix4(part.matrixWorld),
+        });
+      }
+      // ONE BOX PER PIPE. Unioning them spans the whole rear, so a plate sitting neatly
+      // between two widely-set tips looks like a clash when neither pipe touches it.
+      let pipeCount = 0;
+      result.carGroup.traverse((node) => {
+        const mesh = node as THREE.Mesh;
+        // The bore liner identifies a tailpipe: an open cylinder rendered from the inside.
+        const mat = mesh.material as THREE.MeshStandardMaterial | undefined;
+        if (!mesh.isMesh || !mat || mat.side !== THREE.BackSide) return;
+        mesh.geometry.computeBoundingBox();
+        parts.push({
+          name: "exhaust",
+          box: mesh.geometry.boundingBox!.clone().applyMatrix4(mesh.matrixWorld),
+        });
+        pipeCount++;
+      });
+      assert.ok(pipeCount > 0, `${v.id}/${v.colorIndex}: found no tailpipe`);
+
+      // The lenses are deliberately set INSIDE the housing's cut openings, so compare only
+      // features that are meant to be separate: plate, plate recess, and the pipes.
+      const separate = parts.filter((p) => p.name === "BoxGeometry" || p.name === "PlaneGeometry" || p.name === "exhaust");
+      const clashes: string[] = [];
+      for (let i = 0; i < separate.length; i++) {
+        for (let j = i + 1; j < separate.length; j++) {
+          const a = separate[i];
+          const b = separate[j];
+          // Plate sits inside its own recess by design; skip that one nesting.
+          if (a.name !== "exhaust" && b.name !== "exhaust") continue;
+          if (a.name === "exhaust" && b.name === "exhaust") continue;
+          if (!a.box.intersectsBox(b.box)) continue;
+          const overlap = a.box.clone().intersect(b.box);
+          const size = overlap.getSize(new THREE.Vector3());
+          if (size.x > 1e-3 && size.y > 1e-3 && size.z > 1e-3) {
+            clashes.push(`${a.name} intersects ${b.name} by ${size.x.toFixed(3)} x ${size.y.toFixed(3)} m`);
+          }
+        }
+      }
+      void shellBox;
+      assert.deepEqual(clashes, [], `${v.id}/${v.colorIndex}: ${clashes.join("; ")}`);
+    }
+  });
+
   it("no car material requests a transmission pass", () => {
     // `transmission > 0` makes three render the whole opaque scene into a second render
     // target every frame so refracting surfaces have something to sample. The glass was
