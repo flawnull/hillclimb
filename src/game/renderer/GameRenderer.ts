@@ -259,7 +259,24 @@ export class GameRenderer {
     // intensity made them more obvious. normalBias offsets along the surface normal, which is
     // what large sloped meshes need; the small negative constant bias handles the rest.
     this.dirLight.shadow.bias = -0.0006;
-    this.dirLight.shadow.normalBias = 0.8;
+    //
+    // BUT NORMALBIAS IS ALSO A FLOOR ON HOW BIG A CASTER HAS TO BE TO CAST ANYTHING. It offsets
+    // the receiver's shadow lookup along the receiver's OWN normal, so flat ground samples the
+    // map 0.8 m in the air, and with the sun 54 degrees up that also moves the lookup ~0.6 m
+    // sideways. The car is 1.15 m tall. Its shadow was not merely softened, it was erased:
+    // rendered from straight overhead where none of it can hide under the bodywork, and diffed
+    // against the same frame with the car's casters switched off, the number of pixels the car
+    // darkens is
+    //     normalBias 0.8 -> 0      0.4 -> 0      0.2 -> 996      0.05 -> 5631
+    // The gantries and hillsides are metres tall and kept casting, so shadows LOOKED fine, and
+    // the one object the player stares at every frame was the one thing not grounded by them.
+    //
+    // 0.05 is safe here because the sun is not free: ChaseCameraController pins it to a fixed
+    // offset from the car, so the light-to-slope geometry that produces acne is bounded by the
+    // terrain, not by a moving sun. Checked for the streaking this was raised for at six poses
+    // across both stages — sweeper, hairpin and ridge — where the slopes are indistinguishable
+    // from 0.8 and the tree and building shadows are sharper.
+    this.dirLight.shadow.normalBias = 0.05;
     this.dirLight.shadow.camera.near = 1;
     this.dirLight.shadow.camera.far = 350;
     this.dirLight.shadow.camera.left = -60;
@@ -283,6 +300,8 @@ export class GameRenderer {
 
     // 5. Build Vehicle 3D Model
     this.carGroup = new THREE.Group();
+    // Named so the dev-only visual harness (scripts/car-check.ts) can find it in the scene.
+    this.carGroup.name = "carGroup";
     this.scene.add(this.carGroup);
     this.rebuildCarMesh();
 
@@ -639,6 +658,20 @@ export class GameRenderer {
               mat.emissive.copy(isBraking ? BRAKE_EMISSIVE_ON : BRAKE_EMISSIVE_OFF);
               mat.emissiveIntensity = isBraking ? 3.0 : 0.6;
             }
+          }
+        }
+
+        // 5a. Brake Halos
+        //
+        // Eased rather than snapped: a lamp's apparent bloom grows with its brightness, and a
+        // hard step to full opacity reads as a flicker at 60 Hz. Two additive quads, which is
+        // why there is no bloom post-pass — see CarMeshBuilder.
+        for (const glow of this.carMeshResult.brakeGlowMeshes) {
+          const mat = glow.material as THREE.MeshBasicMaterial;
+          const target = isBraking ? 0.85 : 0.0;
+          if (mat.opacity !== target) {
+            mat.opacity += (target - mat.opacity) * Math.min(1, deltaSeconds * 18);
+            if (Math.abs(target - mat.opacity) < 0.004) mat.opacity = target;
           }
         }
 

@@ -15,24 +15,82 @@ export interface CarMeshResult {
   brakeLightMeshes: THREE.Mesh[];
   reverseLightMeshes: THREE.Mesh[];
   headlightGlowMeshes: THREE.Mesh[];
+  /** Additive halos behind the tail lamps. Opacity is driven by the braking state. */
+  brakeGlowMeshes: THREE.Mesh[];
   brakeDiscs: THREE.Mesh[];
   exhaustFlame: THREE.Mesh | null;
   perkGlowMesh: THREE.Mesh | null;
   spoilerGroup: THREE.Group | null;
 }
 
+interface Pt2 {
+  x: number;
+  y: number;
+}
+interface Pt3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * Width of the chamfer taken off the shoulder and roof-rail corners of the body section.
+ *
+ * The body is lofted through six-point sections, so the shoulder line and roof rail were
+ * single hard creases between two large, flat-shaded faces. A hard crease has no face of its
+ * own, so it can never catch a highlight — the two panels either side just meet at a step in
+ * brightness. Replacing each corner with a narrow strip gives the light something to sit on,
+ * which is what reads as a rolled body edge.
+ */
+const BEVEL_M = 0.038;
+
+/** Ring point indices produced by `halfRing`, from the floor centreline up to the roof centre. */
+const R_FLOOR_CENTRE = 0;
+const R_SILL = 1;
+const R_BELT_LOWER = 2;
+const R_BELT_UPPER = 3;
+const R_TOP_OUTER = 4;
+const R_TOP_INNER = 5;
+const R_ROOF_CENTRE = 6;
+
+/** Segment index i spans ring points i..i+1. */
+const SEG_UPPER_FLANK = R_BELT_UPPER; // 3 — where the side glass goes
+const SEG_ROOF = R_TOP_INNER; // 5 — where the screens go
+
 export class CarMeshBuilder {
   private static radialGlowTexture: THREE.Texture | null = null;
   private static groundShadowTexture: THREE.Texture | null = null;
+  private static plateTexture: THREE.Texture | null = null;
+  private static environmentTexture: THREE.Texture | null = null;
+
+  /**
+   * A 2D canvas, or null when there is no DOM.
+   *
+   * The generated textures are pure decoration; the geometry is the part worth testing, and
+   * the test runner has no canvas. Returning null here (and a flat 1x1 texture from the
+   * getters) is what lets `buildCarModel` run head&shy;less at all.
+   */
+  private static canvas2d(width: number, height: number): CanvasRenderingContext2D | null {
+    if (typeof document === "undefined") return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas.getContext("2d");
+  }
+
+  private static flatTexture(r: number, g: number, b: number, a: number): THREE.Texture {
+    const tex = new THREE.DataTexture(new Uint8Array([r, g, b, a]), 1, 1);
+    tex.needsUpdate = true;
+    return tex;
+  }
 
   public static getRadialGlowTexture(): THREE.Texture {
     if (CarMeshBuilder.radialGlowTexture) return CarMeshBuilder.radialGlowTexture;
 
     const size = 128;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d")!;
+    const ctx = CarMeshBuilder.canvas2d(size, size);
+    if (!ctx) return (CarMeshBuilder.radialGlowTexture = CarMeshBuilder.flatTexture(255, 255, 255, 255));
+
     const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
     grad.addColorStop(0.0, "rgba(255,255,255,1)");
     grad.addColorStop(0.45, "rgba(255,255,255,0.55)");
@@ -40,7 +98,7 @@ export class CarMeshBuilder {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, size, size);
 
-    const tex = new THREE.CanvasTexture(canvas);
+    const tex = new THREE.CanvasTexture(ctx.canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     CarMeshBuilder.radialGlowTexture = tex;
     return tex;
@@ -50,10 +108,9 @@ export class CarMeshBuilder {
     if (CarMeshBuilder.groundShadowTexture) return CarMeshBuilder.groundShadowTexture;
 
     const size = 128;
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d")!;
+    const ctx = CarMeshBuilder.canvas2d(size, size);
+    if (!ctx) return (CarMeshBuilder.groundShadowTexture = CarMeshBuilder.flatTexture(0, 0, 0, 128));
+
     const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.15, size / 2, size / 2, size * 0.48);
     grad.addColorStop(0.0, "rgba(0,0,0,0.85)");
     grad.addColorStop(0.5, "rgba(0,0,0,0.45)");
@@ -61,9 +118,102 @@ export class CarMeshBuilder {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, size, size);
 
-    const tex = new THREE.CanvasTexture(canvas);
+    const tex = new THREE.CanvasTexture(ctx.canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     CarMeshBuilder.groundShadowTexture = tex;
+    return tex;
+  }
+
+  /**
+   * Italian-style rear plate: dark border, blue EU band, black characters on white.
+   *
+   * "GE" is the Genova provincial code the Val Borbera sits under. Generated rather than
+   * shipped as an image so the model needs no art asset.
+   */
+  public static getPlateTexture(): THREE.Texture {
+    if (CarMeshBuilder.plateTexture) return CarMeshBuilder.plateTexture;
+
+    const w = 256;
+    const h = 68;
+    const ctx = CarMeshBuilder.canvas2d(w, h);
+    if (!ctx) return (CarMeshBuilder.plateTexture = CarMeshBuilder.flatTexture(240, 240, 240, 255));
+
+    ctx.fillStyle = "#0b0b0d";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "#f3f4f6";
+    ctx.fillRect(3, 3, w - 6, h - 6);
+
+    // EU bands at both ends, as on an Italian plate.
+    ctx.fillStyle = "#1b3fa0";
+    ctx.fillRect(3, 3, 26, h - 6);
+    ctx.fillRect(w - 29, 3, 26, h - 6);
+    ctx.fillStyle = "#f6d64a";
+    ctx.font = "bold 15px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("I", 16, h * 0.66);
+    ctx.fillText("GE", w - 16, h * 0.66);
+
+    ctx.fillStyle = "#0b0b0d";
+    ctx.font = "bold 40px 'Arial Narrow', Arial, sans-serif";
+    ctx.fillText("VB 108 BR", w / 2, h / 2 + 2);
+
+    const tex = new THREE.CanvasTexture(ctx.canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    CarMeshBuilder.plateTexture = tex;
+    return tex;
+  }
+
+  /**
+   * A tiny equirectangular sky/ground gradient used as the reflection source for the paint,
+   * chrome and glass.
+   *
+   * Clearcoat, metalness and low roughness all describe how a surface REFLECTS ITS
+   * SURROUNDINGS. With no environment there is nothing to reflect, so those parameters buy
+   * almost nothing: the old body material asked for `metalness: 0.65`, which under punctual
+   * lights alone mostly just subtracts diffuse and leaves the paint reading dark and flat —
+   * the "flat diffuse blue" look. A 64x32 gradient is enough to fix that, because the only
+   * thing the car needs to reflect is a sky, a horizon and some ground.
+   *
+   * It is assigned per-material rather than as `scene.environment` deliberately: the terrain
+   * and the ~43k triangles of vegetation are also standard materials, and they would each pay
+   * an extra cube lookup per fragment for a reflection nobody would notice on grass.
+   */
+  public static getEnvironmentTexture(): THREE.Texture {
+    if (CarMeshBuilder.environmentTexture) return CarMeshBuilder.environmentTexture;
+
+    const w = 64;
+    const h = 32;
+    const ctx = CarMeshBuilder.canvas2d(w, h);
+    if (!ctx) {
+      const tex = CarMeshBuilder.flatTexture(140, 165, 190, 255);
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      return (CarMeshBuilder.environmentTexture = tex);
+    }
+
+    // Sky above, the scene's own haze colour at the horizon, hillside below.
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0.0, "#b9d6ee");
+    grad.addColorStop(0.42, "#8fb0cc");
+    grad.addColorStop(0.5, "#7891a8");
+    grad.addColorStop(0.58, "#5d6a5c");
+    grad.addColorStop(1.0, "#3c4438");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // A soft warm sun, so low-roughness surfaces get a moving highlight to roll across
+    // rather than a uniform wash. Broad on purpose: this texture is sampled without a PMREM
+    // pre-blur, so anything small would read as a hard dot on the paint.
+    const sun = ctx.createRadialGradient(w * 0.72, h * 0.2, 0, w * 0.72, h * 0.2, w * 0.22);
+    sun.addColorStop(0.0, "rgba(255,247,224,0.95)");
+    sun.addColorStop(1.0, "rgba(255,247,224,0)");
+    ctx.fillStyle = sun;
+    ctx.fillRect(0, 0, w, h);
+
+    const tex = new THREE.CanvasTexture(ctx.canvas);
+    tex.mapping = THREE.EquirectangularReflectionMapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    CarMeshBuilder.environmentTexture = tex;
     return tex;
   }
 
@@ -110,6 +260,7 @@ export class CarMeshBuilder {
     const brakeLightMeshes: THREE.Mesh[] = [];
     const reverseLightMeshes: THREE.Mesh[] = [];
     const headlightGlowMeshes: THREE.Mesh[] = [];
+    const brakeGlowMeshes: THREE.Mesh[] = [];
     const brakeDiscs: THREE.Mesh[] = [];
 
     const colorway = car.colorways[colorIndex] || car.colorways[0];
@@ -120,20 +271,32 @@ export class CarMeshBuilder {
     const wheelWidth = bodyStyle === "sport_mid" ? 0.25 : bodyStyle === "box_utility" ? 0.20 : 0.23;
     chassisGroup.position.set(0, wheelRadius * 0.75, 0);
 
+    const envMap = CarMeshBuilder.getEnvironmentTexture();
+
     // 1. Physical Materials
+    //
+    // Automotive paint is a DIELECTRIC basecoat under a clear lacquer, not a metal. The old
+    // `metalness: 0.65` tinted the specular reflection by the paint colour and removed most
+    // of the diffuse term, which with no environment to reflect just made every car darker
+    // and flatter than its colourway. The metallic flake is worth a little, not two thirds.
     const bodyMat = new THREE.MeshPhysicalMaterial({
       color: colorway.primary,
-      metalness: 0.65,
-      roughness: 0.28,
-      clearcoat: 0.95,
-      clearcoatRoughness: 0.08,
+      metalness: 0.16,
+      roughness: 0.26,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.05,
+      envMap,
+      envMapIntensity: 0.95,
     });
 
     const secondaryMat = new THREE.MeshPhysicalMaterial({
       color: colorway.secondary || "#0f172a",
-      metalness: 0.5,
-      roughness: 0.35,
-      clearcoat: 0.8,
+      metalness: 0.2,
+      roughness: 0.34,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.08,
+      envMap,
+      envMapIntensity: 0.8,
     });
 
     const trimMat = new THREE.MeshStandardMaterial({
@@ -142,19 +305,40 @@ export class CarMeshBuilder {
       metalness: 0.2,
     });
 
+    /** Shut lines and light housings: matte, near-black, and never reflective. */
+    const seamMat = new THREE.MeshStandardMaterial({
+      color: "#0a0c10",
+      roughness: 0.95,
+      metalness: 0.0,
+      side: THREE.DoubleSide,
+    });
+
     const chromeMat = new THREE.MeshStandardMaterial({
       color: "#f8fafc",
       metalness: 0.95,
       roughness: 0.08,
+      envMap,
+      envMapIntensity: 1.35,
     });
 
+    // Glass is reflection, not transmission.
+    //
+    // The old material asked for `transmission: 0.45`, which is not a cheap parameter: three
+    // renders the whole opaque scene into a separate transmission render target so refracting
+    // surfaces have something to sample. That is an extra full pass per frame to look through
+    // a window at a car interior this model does not have. Tinted, sharply reflective glass
+    // over a dark cabin reads the same from outside and costs a normal blended draw.
     const glassMat = new THREE.MeshPhysicalMaterial({
-      color: "#030712",
-      roughness: 0.05,
-      transmission: 0.45,
+      color: "#0d1a26",
+      roughness: 0.03,
+      metalness: 0.0,
+      reflectivity: 1.0,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.02,
       transparent: true,
-      opacity: 0.85,
-      metalness: 0.1,
+      opacity: 0.62,
+      envMap,
+      envMapIntensity: 1.9,
     });
 
     // 2. Body Sections
@@ -213,78 +397,106 @@ export class CarMeshBuilder {
       ];
     }
 
+    // 3. Half-section profile, mirrored across x = 0.
+    //
+    // WHY THE SHELL IS BUILT AS ONE HALF AND MIRRORED, rather than as a closed six-point ring.
+    //
+    // The old loft walked a ring of six points and emitted one quad per edge as the triangle
+    // pair (0,1,2)+(0,2,3). Read the ring in order and the left flank's corners arrive as
+    // sill,sill,belt,belt while the RIGHT flank's arrive as belt,belt,sill,sill — the same
+    // band, entered from the other end. That flips which diagonal the quad is split along.
+    //
+    // A quad only splits identically both ways when it is planar, and almost none of these
+    // are: the section profile changes width AND height between rings, so every panel is
+    // slightly saddle-shaped. The two sides therefore creased along opposite diagonals, which
+    // is visible wherever the profile changes fastest — the C-pillar and the backlight, where
+    // the roof drops and the shoulder widens at the same time. Measured on the old geometry:
+    // all 64 body triangles and all 16 glass triangles lacked a correctly-wound mirror.
+    //
+    // Emitting the left half and reflecting each triangle makes symmetry structural rather
+    // than something the section table has to be lucky enough to preserve. Covered by
+    // tests/car-model.test.ts.
+
+    /** A point `width` metres from `corner` along the edge towards `edgeEnd`, capped so a
+     *  chamfer can never eat more than 40% of a short edge. */
+    const towards = (corner: Pt2, edgeEnd: Pt2, width: number): Pt2 => {
+      const dx = edgeEnd.x - corner.x;
+      const dy = edgeEnd.y - corner.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) return { x: corner.x, y: corner.y };
+      const t = Math.min(width, len * 0.4) / len;
+      return { x: corner.x + dx * t, y: corner.y + dy * t };
+    };
+
+    const halfRing = (s: BodySection): Pt2[] => {
+      const sill = { x: -s.wSill / 2, y: s.ySill };
+      const belt = { x: -s.wBelt / 2, y: s.yBelt };
+      const top = { x: -s.wTop / 2, y: s.yTop };
+      const roofCentre = { x: 0, y: s.yTop };
+      return [
+        { x: 0, y: s.ySill },              // R_FLOOR_CENTRE
+        sill,                              // R_SILL
+        towards(belt, sill, BEVEL_M),      // R_BELT_LOWER
+        towards(belt, top, BEVEL_M),       // R_BELT_UPPER
+        towards(top, belt, BEVEL_M),       // R_TOP_OUTER
+        towards(top, roofCentre, BEVEL_M), // R_TOP_INNER
+        roofCentre,                        // R_ROOF_CENTRE
+      ];
+    };
+
+    const rings: Pt2[][] = sections.map(halfRing);
+    const at = (k: number, i: number): Pt3 => ({ x: rings[k][i].x, y: rings[k][i].y, z: sections[k].z });
+
     const bodyPositions: number[] = [];
     const bodyIndices: number[] = [];
     const glassPositions: number[] = [];
     const glassIndices: number[] = [];
 
-    const secVerts: { x: number; y: number; z: number }[][] = [];
-    for (let k = 0; k < sections.length; k++) {
-      const s = sections[k];
-      secVerts.push([
-        { x: -s.wSill / 2, y: s.ySill, z: s.z },
-        { x: -s.wBelt / 2, y: s.yBelt, z: s.z },
-        { x: -s.wTop / 2,  y: s.yTop,  z: s.z },
-        { x: s.wTop / 2,   y: s.yTop,  z: s.z },
-        { x: s.wBelt / 2,  y: s.yBelt, z: s.z },
-        { x: s.wSill / 2,  y: s.ySill, z: s.z },
-      ]);
-    }
-
-    let bIdx = 0;
-    const addBodyQuad = (p0: {x:number,y:number,z:number}, p1: {x:number,y:number,z:number}, p2: {x:number,y:number,z:number}, p3: {x:number,y:number,z:number}) => {
-      bodyPositions.push(p0.x, p0.y, p0.z,  p1.x, p1.y, p1.z,  p2.x, p2.y, p2.z,  p3.x, p3.y, p3.z);
-      bodyIndices.push(bIdx, bIdx + 1, bIdx + 2,  bIdx, bIdx + 2, bIdx + 3);
-      bIdx += 4;
+    const pushTri = (pos: number[], idx: number[], a: Pt3, b: Pt3, c: Pt3) => {
+      const base = pos.length / 3;
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+      idx.push(base, base + 1, base + 2);
     };
 
-    let gIdx = 0;
-    const addGlassQuad = (p0: {x:number,y:number,z:number}, p1: {x:number,y:number,z:number}, p2: {x:number,y:number,z:number}, p3: {x:number,y:number,z:number}) => {
-      glassPositions.push(p0.x, p0.y, p0.z,  p1.x, p1.y, p1.z,  p2.x, p2.y, p2.z,  p3.x, p3.y, p3.z);
-      glassIndices.push(gIdx, gIdx + 1, gIdx + 2,  gIdx, gIdx + 2, gIdx + 3);
-      gIdx += 4;
+    /** Emits a quad on the left half and its reflection. Winding is normalised afterwards by
+     *  `orientFacesOutward`, which is mirror-stable: reflecting a triangle negates the x of
+     *  both its normal and its offset from the (centreline) centroid, so the sign of their
+     *  dot product — and therefore the flip decision — is identical for a mirrored pair. */
+    const addQuad = (glass: boolean, p0: Pt3, p1: Pt3, p2: Pt3, p3: Pt3) => {
+      const pos = glass ? glassPositions : bodyPositions;
+      const idx = glass ? glassIndices : bodyIndices;
+      pushTri(pos, idx, p0, p1, p2);
+      pushTri(pos, idx, p0, p2, p3);
+      const m = (p: Pt3): Pt3 => ({ x: -p.x, y: p.y, z: p.z });
+      pushTri(pos, idx, m(p0), m(p3), m(p2));
+      pushTri(pos, idx, m(p0), m(p2), m(p1));
+    };
+
+    const addTri = (p0: Pt3, p1: Pt3, p2: Pt3) => {
+      pushTri(bodyPositions, bodyIndices, p0, p1, p2);
+      const m = (p: Pt3): Pt3 => ({ x: -p.x, y: p.y, z: p.z });
+      pushTri(bodyPositions, bodyIndices, m(p0), m(p2), m(p1));
     };
 
     for (let k = 0; k < sections.length - 1; k++) {
-      const vA = secVerts[k];
-      const vB = secVerts[k + 1];
-
-      addBodyQuad(vA[0], vB[0], vB[1], vA[1]);
-
-      if (k >= 2 && k <= 4) {
-        addGlassQuad(vA[1], vB[1], vB[2], vA[2]);
-      } else {
-        addBodyQuad(vA[1], vB[1], vB[2], vA[2]);
+      for (let seg = 0; seg < R_ROOF_CENTRE; seg++) {
+        let glass = false;
+        if (seg === SEG_UPPER_FLANK) {
+          glass = k >= 2 && k <= 4; // side windows
+        } else if (seg === SEG_ROOF) {
+          // Windscreen, then the backlight — which a van does not get, its roof runs on.
+          glass = k === 2 || (k === 4 && bodyStyle !== "box_utility");
+        }
+        addQuad(glass, at(k, seg), at(k + 1, seg), at(k + 1, seg + 1), at(k, seg + 1));
       }
-
-      if (k === 2) {
-        addGlassQuad(vA[2], vB[2], vB[3], vA[3]);
-      } else if (k === 3) {
-        addBodyQuad(vA[2], vB[2], vB[3], vA[3]);
-      } else if (k === 4 && bodyStyle !== "box_utility") {
-        addGlassQuad(vA[2], vB[2], vB[3], vA[3]);
-      } else {
-        addBodyQuad(vA[2], vB[2], vB[3], vA[3]);
-      }
-
-      if (k >= 2 && k <= 4) {
-        addGlassQuad(vA[3], vB[3], vB[4], vA[4]);
-      } else {
-        addBodyQuad(vA[3], vB[3], vB[4], vA[4]);
-      }
-
-      addBodyQuad(vA[4], vB[4], vB[5], vA[5]);
-      addBodyQuad(vA[5], vB[5], vB[0], vA[0]);
     }
 
-    // Front & Rear Caps
-    const fv = secVerts[0];
-    addBodyQuad(fv[0], fv[5], fv[4], fv[1]);
-    addBodyQuad(fv[1], fv[4], fv[3], fv[2]);
-
-    const rv = secVerts[secVerts.length - 1];
-    addBodyQuad(rv[5], rv[0], rv[1], rv[4]);
-    addBodyQuad(rv[4], rv[1], rv[2], rv[3]);
+    // Front & rear caps: a fan from the floor centreline around the half ring, mirrored.
+    for (const k of [0, sections.length - 1]) {
+      for (let i = R_SILL; i < R_ROOF_CENTRE; i++) {
+        addTri(at(k, R_FLOOR_CENTRE), at(k, i), at(k, i + 1));
+      }
+    }
 
     const bodyGeo = new THREE.BufferGeometry();
     bodyGeo.setAttribute("position", new THREE.Float32BufferAttribute(bodyPositions, 3));
@@ -304,8 +516,86 @@ export class CarMeshBuilder {
     const glassMesh = new THREE.Mesh(glassGeo, glassMat);
     chassisGroup.add(glassMesh);
 
+    // A dark cabin behind the glass.
+    //
+    // The greenhouse is a shell with nothing inside it, so the windscreen and the backlight
+    // line up and the player sees the road THROUGH the car — which no amount of tinting fixes,
+    // because tint darkens what is behind the glass and what is behind the glass was more
+    // road. One matte box between the two screens is what glass needs to read as glass: it
+    // gives the tint something to sit over and the reflections something to beat.
+    //
+    // Kept between the two middle sections, where the roof is at full height. Extending it
+    // forward under the windscreen would push it through a roofline that is still rising.
+    const cabinFrontZ = sections[3].z;
+    const cabinRearZ = sections[4].z;
+    // Held clear of the roofline. Flush with it, the box's sun-lit top face lines up with the
+    // backlight and is what you see through the rear window — a bright slab where an interior
+    // should be. Dropped below, the screens look onto its unlit faces instead.
+    const cabinTop = Math.min(sections[3].yTop, sections[4].yTop) - 0.07;
+    const cabinBase = sections[3].yBelt;
+    const cabin = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        Math.min(sections[3].wTop, sections[4].wTop) - 0.05,
+        cabinTop - cabinBase,
+        Math.abs(cabinFrontZ - cabinRearZ)
+      ),
+      new THREE.MeshStandardMaterial({ color: "#0a0c0f", roughness: 1.0, metalness: 0.0 })
+    );
+    cabin.position.set(0, (cabinTop + cabinBase) / 2, (cabinFrontZ + cabinRearZ) / 2);
+    chassisGroup.add(cabin);
+
     const frontZ = sections[0].z;
     const rearZ = sections[sections.length - 1].z;
+
+    // 4. Panel shut lines.
+    //
+    // A real car is assembled from separate pressings, and the dark line where two of them
+    // meet is most of what tells the eye it is looking at a machine rather than a solid.
+    // Each seam is a narrow dark ribbon following the section ring it sits on, lifted a few
+    // millimetres proud of the skin so it cannot z-fight with the panel underneath.
+    const addShutLine = (sectionIndex: number) => {
+      const ring = rings[sectionIndex];
+      const z = sections[sectionIndex].z;
+      const halfDepth = 0.008;
+      const proud = 0.006;
+      const positions: number[] = [];
+      const indices: number[] = [];
+      for (let i = R_SILL; i < R_ROOF_CENTRE; i++) {
+        // Outward normal of this ring edge, in the section plane.
+        const dx = ring[i + 1].x - ring[i].x;
+        const dy = ring[i + 1].y - ring[i].y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = (dy / len) * proud;
+        const ny = (-dx / len) * proud;
+        // The ring is walked from the floor upwards on the left, so (dy, -dx) points away
+        // from the body on that side.
+        for (const p of [ring[i], ring[i + 1]]) {
+          for (const side of [-1, 1] as const) {
+            for (const mirror of [1, -1] as const) {
+              positions.push(mirror * (p.x + nx), p.y + ny, z + side * halfDepth);
+            }
+          }
+        }
+      }
+      // Stitch: vertices are laid out as [a-, a+, b-, b+] per ring point pair, four per
+      // point-side; build one quad per (edge, mirror).
+      const perEdge = 8;
+      for (let e = 0; e * perEdge < positions.length / 3; e++) {
+        const o = e * perEdge;
+        for (const mirror of [0, 1]) {
+          const v = [o + mirror, o + 2 + mirror, o + 6 + mirror, o + 4 + mirror];
+          indices.push(v[0], v[1], v[2], v[0], v[2], v[3]);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      chassisGroup.add(new THREE.Mesh(geo, seamMat));
+    };
+    // Bonnet/wing shut at the base of the windscreen, boot shut at the base of the backlight.
+    addShutLine(2);
+    addShutLine(sections.length - 2);
 
     // Side Mirrors
     const mirrorGeo = new THREE.BoxGeometry(0.14, 0.08, 0.10);
@@ -315,16 +605,23 @@ export class CarMeshBuilder {
     mirrorR.position.set(sections[2].wBelt / 2 + 0.08, sections[2].yBelt + 0.04, sections[2].z + 0.08);
     chassisGroup.add(mirrorL, mirrorR);
 
+    /** Emissive lamp material. `toneMapped: false` keeps the lens out of the ACES curve, so a
+     *  lit lamp stays a saturated light source instead of being rolled off towards white with
+     *  the rest of the frame. */
+    const lampMat = (color: string, emissive: string, intensity: number) =>
+      new THREE.MeshStandardMaterial({
+        color,
+        emissive,
+        emissiveIntensity: intensity,
+        roughness: 0.1,
+        toneMapped: false,
+      });
+
     // Front Grilles & Lights by Body Style
     if (bodyStyle === "rally_hatch") {
       const podRimGeo = new THREE.CylinderGeometry(0.13, 0.13, 0.04, 14);
       const podLensGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.06, 14);
-      const podMat = new THREE.MeshStandardMaterial({
-        color: "#fef08a",
-        emissive: "#facc15",
-        emissiveIntensity: 1.6,
-        roughness: 0.1,
-      });
+      const podMat = lampMat("#fef08a", "#facc15", 1.6);
 
       for (const offX of [-0.48, -0.18, 0.18, 0.48]) {
         const podRim = new THREE.Mesh(podRimGeo, chromeMat);
@@ -355,12 +652,7 @@ export class CarMeshBuilder {
 
       const safariRimGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.04, 14);
       const safariLensGeo = new THREE.CylinderGeometry(0.10, 0.10, 0.06, 14);
-      const safariMat = new THREE.MeshStandardMaterial({
-        color: "#fef08a",
-        emissive: "#facc15",
-        emissiveIntensity: 1.5,
-        roughness: 0.1,
-      });
+      const safariMat = lampMat("#fef08a", "#facc15", 1.5);
 
       for (const offX of [-0.35, 0.35]) {
         const sfRim = new THREE.Mesh(safariRimGeo, chromeMat);
@@ -384,12 +676,7 @@ export class CarMeshBuilder {
       spareTire.position.set(0, sections[3].yTop + 0.14, -0.45);
       chassisGroup.add(rack, spareTire);
     } else if (bodyStyle === "sport_mid") {
-      const hlMat = new THREE.MeshStandardMaterial({
-        color: "#f8fafc",
-        emissive: "#bae6fd",
-        emissiveIntensity: 1.8,
-        roughness: 0.1,
-      });
+      const hlMat = lampMat("#f8fafc", "#bae6fd", 1.8);
       const hlGeoOuter = new THREE.CylinderGeometry(0.12, 0.12, 0.04, 14);
       const hlGeoInner = new THREE.CylinderGeometry(0.09, 0.09, 0.04, 14);
       const ringGeoOuter = new THREE.CylinderGeometry(0.135, 0.135, 0.02, 14);
@@ -415,12 +702,7 @@ export class CarMeshBuilder {
       kidneyR.position.set(0.11, 0.28, frontZ + 0.03);
       chassisGroup.add(grille, kidneyL, kidneyR);
 
-      const hlMat = new THREE.MeshStandardMaterial({
-        color: "#f8fafc",
-        emissive: "#dbeafe",
-        emissiveIntensity: 2.0,
-        roughness: 0.1,
-      });
+      const hlMat = lampMat("#f8fafc", "#dbeafe", 2.0);
       const hlGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.04, 14);
       const hlRingGeo = new THREE.CylinderGeometry(0.125, 0.125, 0.02, 14);
 
@@ -437,68 +719,126 @@ export class CarMeshBuilder {
       }
     }
 
-    // Taillights
-    const tlBarGeo = new THREE.BoxGeometry(1.42, 0.08, 0.04);
-    const tlMat = new THREE.MeshStandardMaterial({
-      color: "#ef4444",
-      emissive: "#7f1d1d",
-      emissiveIntensity: 1.0,
-      roughness: 0.2,
-    });
+    // 5. Rear lamps, set into a housing.
+    //
+    // A lens flush with the bumper skin reads as a sticker. The body shell is closed at
+    // `rearZ`, so a true cavity would mean cutting the rear cap; instead the housing bezel
+    // stands about a centimetre PROUDER than the lens it surrounds, which produces the same
+    // shading cue — a dark rim with the lit surface sunk behind it.
+    const tlHousing = new THREE.Mesh(new THREE.BoxGeometry(1.50, 0.15, 0.055), seamMat);
+    tlHousing.position.set(0, 0.44, rearZ - 0.026);
+    chassisGroup.add(tlHousing);
+
+    const tlBarGeo = new THREE.BoxGeometry(1.42, 0.08, 0.035);
+    const tlMat = lampMat("#ef4444", "#7f1d1d", 1.0);
+    tlMat.roughness = 0.2;
     const tlBar = new THREE.Mesh(tlBarGeo, tlMat);
-    tlBar.position.set(0, 0.44, rearZ - 0.02);
+    tlBar.position.set(0, 0.44, rearZ - 0.022);
     chassisGroup.add(tlBar);
 
-    const tlRoundGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.04, 14);
+    const tlRoundGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.035, 14);
     const tlL = new THREE.Mesh(tlRoundGeo, tlMat);
     tlL.rotation.x = Math.PI / 2;
-    tlL.position.set(-0.56, 0.44, rearZ - 0.03);
+    tlL.position.set(-0.56, 0.44, rearZ - 0.032);
     const tlR = new THREE.Mesh(tlRoundGeo, tlMat);
     tlR.rotation.x = Math.PI / 2;
-    tlR.position.set(0.56, 0.44, rearZ - 0.03);
+    tlR.position.set(0.56, 0.44, rearZ - 0.032);
     chassisGroup.add(tlL, tlR);
     brakeLightMeshes.push(tlBar, tlL, tlR);
 
+    // Additive halos around the lamps.
+    //
+    // This is what a bloom pass would be bought for, without the pass. A full-screen bloom
+    // means an extra bright-pass plus several blur iterations over the whole framebuffer
+    // every frame, and this project is currently fill-rate limited, not short of ideas for
+    // where to spend a millisecond. Two additive quads give the same halo around the only
+    // emitters that ever needed one.
+    const glowTex = CarMeshBuilder.getRadialGlowTexture();
+    const glowGeo = new THREE.PlaneGeometry(0.62, 0.42);
+    for (const offX of [-0.56, 0.56]) {
+      const glow = new THREE.Mesh(
+        glowGeo,
+        new THREE.MeshBasicMaterial({
+          color: "#ff2d2d",
+          map: glowTex,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide,
+          toneMapped: false,
+        })
+      );
+      glow.position.set(offX, 0.44, rearZ - 0.075);
+      glow.renderOrder = 3;
+      chassisGroup.add(glow);
+      brakeGlowMeshes.push(glow);
+    }
+
     // Reversing Lights
+    const revMat = lampMat("#f8fafc", "#ffffff", 0.0);
+    revMat.roughness = 0.2;
     const revGeo = new THREE.BoxGeometry(0.12, 0.06, 0.03);
-    const revMat = new THREE.MeshStandardMaterial({
-      color: "#f8fafc",
-      emissive: "#ffffff",
-      emissiveIntensity: 0.0,
-      roughness: 0.2,
-    });
     const revL = new THREE.Mesh(revGeo, revMat);
-    revL.position.set(-0.28, 0.44, rearZ - 0.03);
+    revL.position.set(-0.28, 0.44, rearZ - 0.030);
     const revR = new THREE.Mesh(revGeo, revMat);
-    revR.position.set(0.28, 0.44, rearZ - 0.03);
+    revR.position.set(0.28, 0.44, rearZ - 0.030);
     chassisGroup.add(revL, revR);
     reverseLightMeshes.push(revL, revR);
 
-    // License Plate
+    // License Plate, sunk into a dark surround by the same bezel trick as the lamps.
+    const plateRecess = new THREE.Mesh(new THREE.BoxGeometry(0.50, 0.17, 0.04), seamMat);
+    plateRecess.position.set(0, 0.28, rearZ - 0.018);
     const plate = new THREE.Mesh(
-      new THREE.BoxGeometry(0.44, 0.12, 0.02),
-      new THREE.MeshStandardMaterial({ color: "#f8fafc", roughness: 0.4 })
+      new THREE.PlaneGeometry(0.44, 0.12),
+      new THREE.MeshStandardMaterial({
+        map: CarMeshBuilder.getPlateTexture(),
+        roughness: 0.45,
+        metalness: 0.0,
+      })
     );
-    plate.position.set(0, 0.28, rearZ - 0.02);
-    chassisGroup.add(plate);
+    plate.rotation.y = Math.PI;
+    plate.position.set(0, 0.28, rearZ - 0.039);
+    chassisGroup.add(plateRecess, plate);
 
-    // Exhausts
+    // Exhausts.
+    //
+    // A capped cylinder is a chrome peg. A real tailpipe is a tube: the outer wall catches a
+    // highlight, and the bore behind it stays black however bright the scene gets.
+    const makeExhaust = (radius: number, length: number): THREE.Group => {
+      const group = new THREE.Group();
+      const outer = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius, radius, length, 12, 1, true),
+        chromeMat
+      );
+      const bore = new THREE.Mesh(
+        new THREE.CylinderGeometry(radius * 0.78, radius * 0.78, length * 0.96, 12, 1, true),
+        new THREE.MeshStandardMaterial({ color: "#0a0a0b", roughness: 0.85, side: THREE.BackSide })
+      );
+      const floorDisc = new THREE.Mesh(
+        new THREE.CircleGeometry(radius * 0.78, 12),
+        new THREE.MeshStandardMaterial({ color: "#08080a", roughness: 0.95 })
+      );
+      floorDisc.rotation.x = Math.PI / 2;
+      floorDisc.position.y = -length * 0.36;
+      group.add(outer, bore, floorDisc);
+      group.rotation.x = Math.PI / 2;
+      return group;
+    };
+
     if (bodyStyle === "sport_mid") {
       for (const side of [-0.08, 0.08]) {
-        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.20, 10), chromeMat);
-        pipe.rotation.x = Math.PI / 2;
+        const pipe = makeExhaust(0.04, 0.20);
         pipe.position.set(side, 0.18, rearZ - 0.10);
         chassisGroup.add(pipe);
       }
     } else if (bodyStyle === "rally_hatch") {
-      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.24, 12), chromeMat);
-      pipe.rotation.x = Math.PI / 2;
+      const pipe = makeExhaust(0.065, 0.24);
       pipe.position.set(-0.48, 0.16, rearZ - 0.12);
       chassisGroup.add(pipe);
     } else {
       for (const side of [-1, 1]) {
-        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.22, 10), chromeMat);
-        pipe.rotation.x = Math.PI / 2;
+        const pipe = makeExhaust(0.045, 0.22);
         pipe.position.set(0.42 * side, 0.16, rearZ - 0.10);
         chassisGroup.add(pipe);
       }
@@ -506,7 +846,12 @@ export class CarMeshBuilder {
 
     // Exhaust Flame
     const flameGeo = new THREE.ConeGeometry(0.12, 0.45, 8);
-    const flameMat = new THREE.MeshBasicMaterial({ color: "#f97316", transparent: true, opacity: 0 });
+    const flameMat = new THREE.MeshBasicMaterial({
+      color: "#f97316",
+      transparent: true,
+      opacity: 0,
+      toneMapped: false,
+    });
     const flame = new THREE.Mesh(flameGeo, flameMat);
     flame.rotation.x = -Math.PI / 2;
     flame.position.set(bodyStyle === "rally_hatch" ? -0.48 : bodyStyle === "sport_mid" ? 0 : -0.42, 0.16, rearZ - 0.32);
@@ -600,7 +945,16 @@ export class CarMeshBuilder {
       chassisGroup.add(liveryGroup);
     }
 
-    // Ground Contact Shadow
+    carGroup.add(chassisGroup);
+
+    // Ground Contact Shadow.
+    //
+    // THIS BELONGS TO `carGroup`, NOT `chassisGroup`. The chassis is lifted by
+    // `wheelRadius * 0.75` so the body sits on its suspension, and the shadow was parented to
+    // it — which put the contact patch about 25 cm off the ground, level with the axles and
+    // buried inside the bodywork, where it darkened nothing and grounded nothing. The wheels
+    // are pivoted at y = wheelRadius with that same radius, so y = 0 in `carGroup` is exactly
+    // the tyre contact plane, and that is where an occlusion patch has to sit.
     const shadowGeo = new THREE.PlaneGeometry(2.4, 4.6);
     const shadowMat = new THREE.MeshBasicMaterial({
       map: CarMeshBuilder.getGroundShadowTexture(),
@@ -611,11 +965,11 @@ export class CarMeshBuilder {
     });
     const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
     shadowMesh.rotation.x = -Math.PI / 2;
-    shadowMesh.position.set(0, 0.015, 0);
+    shadowMesh.position.set(0, 0.02, 0);
     shadowMesh.renderOrder = 1;
-    chassisGroup.add(shadowMesh);
+    carGroup.add(shadowMesh);
 
-    // Perk Aura
+    // Perk Aura — same story, it was floating at axle height too.
     const perkGeo = new THREE.PlaneGeometry(3.0, 5.4);
     const perkMat = new THREE.MeshBasicMaterial({
       color: colorway.accent,
@@ -625,14 +979,13 @@ export class CarMeshBuilder {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
+      toneMapped: false,
     });
     const perkGlowMesh = new THREE.Mesh(perkGeo, perkMat);
     perkGlowMesh.rotation.x = -Math.PI / 2;
-    perkGlowMesh.position.set(0, 0.03, 0);
+    perkGlowMesh.position.set(0, 0.035, 0);
     perkGlowMesh.renderOrder = 2;
-    chassisGroup.add(perkGlowMesh);
-
-    carGroup.add(chassisGroup);
+    carGroup.add(perkGlowMesh);
 
     // Wheels
     const frontAxleZ = sections[1].z;
@@ -656,7 +1009,13 @@ export class CarMeshBuilder {
 
     const rimColor = bodyStyle === "rally_hatch" ? "#ffffff" : bodyStyle === "sport_mid" ? "#e2e8f0" : "#f1f5f9";
     const rimGeo = new THREE.CylinderGeometry(wheelRadius * 0.68, wheelRadius * 0.68, wheelWidth + 0.012, 16);
-    const rimMat = new THREE.MeshStandardMaterial({ color: rimColor, metalness: 0.88, roughness: 0.18 });
+    const rimMat = new THREE.MeshStandardMaterial({
+      color: rimColor,
+      metalness: 0.88,
+      roughness: 0.18,
+      envMap,
+      envMapIntensity: 1.1,
+    });
 
     const hubGeo = new THREE.CylinderGeometry(wheelRadius * 0.22, wheelRadius * 0.22, wheelWidth + 0.016, 12);
     const hubMat = new THREE.MeshStandardMaterial({ color: "#0f172a", metalness: 0.9, roughness: 0.2 });
@@ -717,6 +1076,7 @@ export class CarMeshBuilder {
       brakeLightMeshes,
       reverseLightMeshes,
       headlightGlowMeshes,
+      brakeGlowMeshes,
       brakeDiscs,
       exhaustFlame: flame,
       perkGlowMesh,

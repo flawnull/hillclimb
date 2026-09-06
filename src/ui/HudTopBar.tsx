@@ -38,6 +38,21 @@ interface HudTopBarProps {
 }
 
 /**
+ * Drops focus from a button that was activated with a pointer.
+ *
+ * A focused <button> swallows Space, and Space is how a run is started. Click either car
+ * arrow with the mouse and the button keeps focus, so the NEXT Space press re-activates it:
+ * the player asks to start, no run begins, and they are silently handed a different car.
+ *
+ * `detail` is the click count — greater than zero means a real pointer activation, zero means
+ * the click was synthesised from Enter or Space on a keyboard. Only the pointer case is
+ * blurred, so keyboard users keep the focus ring and their place in the tab order.
+ */
+function releasePointerFocus(e: React.MouseEvent<HTMLButtonElement>): void {
+  if (e.detail > 0) e.currentTarget.blur();
+}
+
+/**
  * Presentational top HUD row: stage banner + car selector (top-left), and
  * the global action buttons (top-right). Purely visual — all state and
  * handlers are owned by the caller.
@@ -82,7 +97,10 @@ export function HudTopBar({
         {/* Compact Car Selector Docked Cleanly. Hidden while driving — see `isRunning`. */}
         <div className={`${isRunning ? "hidden" : "flex"} items-center gap-1 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 p-1 rounded-xl shadow-xl`}>
           <button
-            onClick={onPrevCar}
+            onClick={(e) => {
+              releasePointerFocus(e);
+              onPrevCar();
+            }}
             aria-label="Previous car"
             className="p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition"
           >
@@ -95,7 +113,10 @@ export function HudTopBar({
             </span>
           </div>
           <button
-            onClick={onNextCar}
+            onClick={(e) => {
+              releasePointerFocus(e);
+              onNextCar();
+            }}
             aria-label="Next car"
             className="p-1 text-slate-400 hover:text-white hover:bg-slate-800/80 rounded-lg transition"
           >
