@@ -114,6 +114,9 @@ export class GameRenderer {
   private lowFpsTimer = 0;
   private highFpsTimer = 0;
   private currentDprScale = 1.0;
+  /** In-flight track build, so a second request cannot start a second world. */
+  private trackBuild: Promise<void> | null = null;
+  private trackBuildSpline: TrackSpline | null = null;
   private qualityTier: QualityTier = "high";
   /**
    * Ring buffer of recent frame times, milliseconds. The auto-scaler judges on the MEDIAN of
@@ -325,7 +328,37 @@ export class GameRenderer {
    * painting. `onProgress` reports 0..1 across the terrain, which is effectively the whole
    * of the load.
    */
-  public async rebuildTrackAsync(
+  /**
+   * Builds a track into the scene, and NEVER BUILDS THE SAME ONE TWICE AT ONCE.
+   *
+   * `hasTrack()` only becomes true when the build finishes, and this build is asynchronous
+   * and takes seconds. The caller's `if (!renderer.hasTrack())` guard therefore lets a second
+   * call straight through while the first is still running — which React StrictMode does on
+   * every mount in development. Both builds ran to completion and both attached their output,
+   * so the dev scene carried TWO of every tree: measured on Borbera, 24 vegetation meshes
+   * holding 70 flowering bushes where the builder emits 35, and the same doubling for every
+   * other species.
+   *
+   * That is a correctness bug on its own, and it also quietly doubled the cost of anything
+   * measured in dev — the draw-call counts taken while chasing the frame rate were inflated
+   * by it.
+   *
+   * Requests for the same spline coalesce onto the build already running; a request for a
+   * different one queues behind it rather than racing it.
+   */
+  public rebuildTrackAsync(
+    spline: TrackSpline,
+    yieldTo: () => Promise<void>,
+    onProgress?: (fraction: number) => void
+  ): Promise<void> {
+    if (this.trackBuild && this.trackBuildSpline === spline) return this.trackBuild;
+    const previous = this.trackBuild ?? Promise.resolve();
+    this.trackBuildSpline = spline;
+    this.trackBuild = previous.then(() => this.buildTrackAsync(spline, yieldTo, onProgress));
+    return this.trackBuild;
+  }
+
+  private async buildTrackAsync(
     spline: TrackSpline,
     yieldTo: () => Promise<void>,
     onProgress?: (fraction: number) => void

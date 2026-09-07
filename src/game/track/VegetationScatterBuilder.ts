@@ -53,6 +53,66 @@ const colorGeo = (geo: THREE.BufferGeometry, hex: string): THREE.BufferGeometry 
   return geo;
 };
 
+/**
+ * Deterministic value in [0,1) from a position, QUANTISED so that vertices sharing a
+ * position get the same answer.
+ *
+ * That quantisation is the whole trick: a SphereGeometry duplicates its vertices along the
+ * UV seam and at the poles, and a per-index random would pull those copies apart and split
+ * the mesh open. Keying on the rounded position moves every copy together.
+ */
+const hashAt = (x: number, y: number, z: number): number => {
+  const q = (v: number) => Math.round(v * 1000) | 0;
+  let h = (q(x) * 374761393 + q(y) * 668265263 + q(z) * 1442695041) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+
+/**
+ * Roughens a canopy by pushing its vertices in and out a little.
+ *
+ * A tree's silhouette is most of what the eye judges it by, and a SphereGeometry canopy is a
+ * perfect ball however it is shaded — which is exactly what the low-poly trees looked like.
+ * Displacing the vertices breaks that outline into something leafy for NO extra geometry:
+ * the triangle count, the draw calls and the shadow cost are all unchanged, and the merge
+ * below recomputes normals from the moved positions so the shading follows the new shape.
+ *
+ * Deterministic in position, so every rebuild produces identical trees.
+ */
+const roughenGeo = (geo: THREE.BufferGeometry, amount: number): THREE.BufferGeometry => {
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    // Radial scale about the trunk axis, plus a smaller nudge in height.
+    const radial = 1 + (hashAt(x, y, z) - 0.5) * 2 * amount;
+    const lift = 1 + (hashAt(z, x, y) - 0.5) * amount;
+    pos.setXYZ(i, x * radial, y * lift, z * radial);
+  }
+  pos.needsUpdate = true;
+  return geo;
+};
+
+/**
+ * Per-instance tint, from the instance's own position.
+ *
+ * Every tree of a species drew in exactly one green, which is what made a hillside of them
+ * read as a repeated stamp. `InstancedMesh.setColorAt` multiplies this into the material for
+ * free — one small buffer, no extra draw call, no extra triangle — so the same geometry can
+ * cover a range of foliage from dark and blue-green to pale and yellow-green.
+ */
+const instanceTint = (x: number, z: number, spread = 1): THREE.Color => {
+  const bright = hashAt(x, 7.1, z);
+  const warm = hashAt(z, 3.3, x);
+  const l = 1 + (bright - 0.5) * 0.34 * spread;
+  return new THREE.Color(
+    l * (1 + (warm - 0.5) * 0.16 * spread),
+    l,
+    l * (1 - (warm - 0.5) * 0.14 * spread)
+  );
+};
+
 const mergeGeometries = (geos: THREE.BufferGeometry[]): THREE.BufferGeometry => {
   let totalVerts = 0;
   let totalIndices = 0;
@@ -129,9 +189,9 @@ export function buildInstancedVegetation(
   // 1. Italian Stone Pine
   const pineTrunk = colorGeo(new THREE.CylinderGeometry(0.20, 0.36, 5.2, 6, 1, true), "#4a2c11");
   pineTrunk.translate(0, 2.6, 0);
-  const pineTier1 = colorGeo(new THREE.ConeGeometry(3.8, 1.6, 8), "#1b431b");
+  const pineTier1 = colorGeo(roughenGeo(new THREE.ConeGeometry(3.8, 1.6, 8), 0.14), "#1b431b");
   pineTier1.translate(0, 5.4, 0);
-  const pineTier2 = colorGeo(new THREE.ConeGeometry(2.6, 1.4, 7), "#235323");
+  const pineTier2 = colorGeo(roughenGeo(new THREE.ConeGeometry(2.6, 1.4, 7), 0.16), "#235323");
   pineTier2.translate(0, 6.2, 0);
   const pineGeo = mergeGeometries([pineTrunk, pineTier1, pineTier2]);
   const pineMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.FrontSide, transparent: false, depthWrite: true });
@@ -139,7 +199,7 @@ export function buildInstancedVegetation(
   // 2. Ligurian Cypress
   const cypTrunk = colorGeo(new THREE.CylinderGeometry(0.18, 0.26, 1.8, 6, 1, true), "#3d2b1f");
   cypTrunk.translate(0, 0.9, 0);
-  const cypCone = colorGeo(new THREE.ConeGeometry(1.2, 6.8, 8), "#143314");
+  const cypCone = colorGeo(roughenGeo(new THREE.ConeGeometry(1.2, 6.8, 8), 0.11), "#143314");
   cypCone.translate(0, 4.8, 0);
   const cypGeo = mergeGeometries([cypTrunk, cypCone]);
   const cypMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.80, side: THREE.FrontSide, transparent: false, depthWrite: true });
@@ -147,9 +207,9 @@ export function buildInstancedVegetation(
   // 3. Ligurian Olive Trees
   const oliveTrunk = colorGeo(new THREE.CylinderGeometry(0.26, 0.42, 2.6, 6, 1, true), "#5c4a38");
   oliveTrunk.translate(0, 1.3, 0);
-  const oliveLobe1 = colorGeo(new THREE.SphereGeometry(2.0, 6, 4), "#556b2f");
+  const oliveLobe1 = colorGeo(roughenGeo(new THREE.SphereGeometry(2.0, 6, 4), 0.20), "#556b2f");
   oliveLobe1.translate(0, 3.2, 0);
-  const oliveLobe2 = colorGeo(new THREE.SphereGeometry(1.6, 5, 3), "#6b8e23");
+  const oliveLobe2 = colorGeo(roughenGeo(new THREE.SphereGeometry(1.6, 5, 3), 0.22), "#6b8e23");
   oliveLobe2.translate(0.6, 3.6, 0.3);
   const oliveGeo = mergeGeometries([oliveTrunk, oliveLobe1, oliveLobe2]);
   const oliveMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, side: THREE.FrontSide, transparent: false, depthWrite: true });
@@ -157,15 +217,15 @@ export function buildInstancedVegetation(
   // 4. Mountain Chestnut & Beech Woods
   const chestnutTrunk = colorGeo(new THREE.CylinderGeometry(0.32, 0.50, 3.8, 6, 1, true), "#3b2314");
   chestnutTrunk.translate(0, 1.9, 0);
-  const chestnutLobe1 = colorGeo(new THREE.SphereGeometry(3.0, 6, 4), "#2d5a27");
+  const chestnutLobe1 = colorGeo(roughenGeo(new THREE.SphereGeometry(3.0, 6, 4), 0.20), "#2d5a27");
   chestnutLobe1.translate(0, 4.4, 0);
-  const chestnutLobe2 = colorGeo(new THREE.SphereGeometry(2.2, 5, 3), "#387030");
+  const chestnutLobe2 = colorGeo(roughenGeo(new THREE.SphereGeometry(2.2, 5, 3), 0.22), "#387030");
   chestnutLobe2.translate(-0.8, 5.0, 0.6);
   const chestnutGeo = mergeGeometries([chestnutTrunk, chestnutLobe1, chestnutLobe2]);
   const chestnutMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.80, side: THREE.FrontSide, transparent: false, depthWrite: true });
 
   // 5. Limestone Boulders
-  const rockGeo = new THREE.DodecahedronGeometry(2.2, 0);
+  const rockGeo = roughenGeo(new THREE.DodecahedronGeometry(2.2, 0), 0.16);
   const rockMat = new THREE.MeshStandardMaterial({ color: "#94a3b8", roughness: 0.92, flatShading: true });
 
   // 6. Background scrub — a single trunk-less low-poly blob (an icosahedron, 20 faces) for
@@ -174,7 +234,7 @@ export function buildInstancedVegetation(
   // green with nothing breaking it up. This only needs to read as scattered brush at a glance
   // from the road, not survive close inspection, so it skips the trunk/tiered-canopy pieces
   // the real species above spend triangles on.
-  const scrubGeo = new THREE.IcosahedronGeometry(1.7, 0);
+  const scrubGeo = roughenGeo(new THREE.IcosahedronGeometry(1.7, 0), 0.24);
   // SMOOTH-SHADED, unlike the boulders. Twenty flat faces lit individually read as a cut
   // crystal, and the far band scales these up several times over, so each facet arrives
   // metres across and the clumps looked like green rocks rather than foliage. Shading the
@@ -182,6 +242,31 @@ export function buildInstancedVegetation(
   // no extra draw call. The colour is dropped and desaturated a little too, so a hillside of
   // them reads as woodland rather than as a row of bright blobs.
   const scrubMat = new THREE.MeshStandardMaterial({ color: "#3a5c30", roughness: 0.92 });
+
+  // 7. Flowering bush — rare, and only where the player can actually see it.
+  //
+  // A wild rose or broom in the verge is a small thing that says a lot: it is the only warm
+  // colour in a landscape that is otherwise entirely green, grey and brown, so one every few
+  // hundred metres registers where an even scatter would just look like litter.
+  //
+  // Cheap by construction: the same twenty-face blob as the scrub with three small blossom
+  // clusters on top, 80 triangles all told, and rare enough that the whole stage carries a
+  // few dozen. It is its own species only because the blossom has to be GEOMETRY — a tint on
+  // the ordinary scrub would turn the entire bush pink rather than flower it.
+  const bloomBody = colorGeo(roughenGeo(new THREE.IcosahedronGeometry(1.45, 0), 0.26), "#425f34");
+  const bloomParts = [bloomBody];
+  for (const [bx, by, bz, r] of [
+    [0.60, 0.92, 0.30, 0.34],
+    [-0.66, 0.60, -0.40, 0.29],
+    [0.10, 1.14, -0.52, 0.26],
+    [-0.30, 1.02, 0.55, 0.24],
+  ] as [number, number, number, number][]) {
+    const blossom = colorGeo(roughenGeo(new THREE.IcosahedronGeometry(r, 0), 0.3), "#c2566d");
+    blossom.translate(bx, by, bz);
+    bloomParts.push(blossom);
+  }
+  const bloomGeo = mergeGeometries(bloomParts);
+  const bloomMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88 });
 
   const dummy = new THREE.Object3D();
 
@@ -194,10 +279,14 @@ export function buildInstancedVegetation(
     matrix: THREE.Matrix4;
     x: number;
     z: number;
+    tint: THREE.Color;
   }
   const placements: Placement[] = [];
   const emit = (species: string, x: number, z: number): void => {
-    placements.push({ species, matrix: dummy.matrix.clone(), x, z });
+    // Blossom is the point of the flowering bush, so its instances vary far less — a wide
+    // tint would wash the pink out on half of them.
+    const spread = species === "veg-bloom" ? 0.35 : species === "veg-rock" ? 0.6 : 1;
+    placements.push({ species, matrix: dummy.matrix.clone(), x, z, tint: instanceTint(x, z, spread) });
   };
 
   // Retained only to keep the per-species population caps the old code enforced through
@@ -209,11 +298,15 @@ export function buildInstancedVegetation(
     "veg-chestnut": 0,
     "veg-rock": 0,
     "veg-scrub": 0,
+    "veg-bloom": 0,
   };
   // Separate, much lower caps than the roadside species: this is background texture spread
   // over a far wider band, not a hedge that needs individually convincing trees. The far
   // band gets its own budget on top so that filling the near band can never starve it —
   // they cover different ground and one is not a substitute for the other.
+  /** Whole-stage budget for flowering bushes. Roughly one every 100 m of road: enough that a
+   *  run passes several, few enough that each one still registers. */
+  const BLOOM_CAP = 38;
   const scrubCount = Math.min(280, Math.floor(samples.length * 0.5));
   const farScrubCount = Math.min(300, Math.floor(samples.length * 0.55));
 
@@ -292,6 +385,47 @@ export function buildInstancedVegetation(
       } else if (emitted["veg-chestnut"] < count) {
         emitted["veg-chestnut"]++;
         emit("veg-chestnut", posX, pz);
+      }
+
+      // A wild rose or broom in the verge, occasionally.
+      //
+      // IN THE VERGE, not in the scrub band. The background scrub starts 65 m off the road
+      // and runs to 600, and at that range a 2 m bush is a few pixels — blossom there is a
+      // stray warm dot on a hillside, not a flower. Two to six metres off the tarmac is where
+      // it is actually driven past and where the colour registers.
+      //
+      // These rolls come last in the station's stream, so adding them cannot shift any of the
+      // placements above.
+      if (rnd() < 0.05 && emitted["veg-bloom"] < BLOOM_CAP) {
+        // Clear of the carriageway by more than the 2.0 m safety corridor the clearance suite
+        // enforces, measured at the bush's OWN position rather than this station's — on a
+        // switchback the verge here can be within touching distance of a different leg.
+        const bd = s.halfWidth + 3.4 + rnd() * 3.0;
+        const bx = s.x + s.normalX * bd * side + (rnd() - 0.5) * 1.2;
+        const bz = s.z + s.normalZ * bd * side + (rnd() - 0.5) * 1.2;
+        const bp = spline.projectFrenet(bx, bz);
+        if (Math.abs(bp.t) > bp.sample.halfWidth + 2.6) {
+          let blocked = false;
+          for (const b of buildings) {
+            if (Math.hypot(b.x - bx, b.z - bz) < b.r + 2.0) {
+              blocked = true;
+              break;
+            }
+          }
+          if (!blocked) {
+            // Big enough to read as a bush from a car, small enough to stay a verge plant:
+            // roughly 2.3-3.8 m across against the background scrub's 4-10 m. Barely sunk,
+            // because at this size burying it 0.2 m leaves little more than the blossom
+            // showing above the grass.
+            const bs = 0.8 + rnd() * 0.5;
+            dummy.position.set(bx, field.heightAt(bx, bz) - 0.12, bz);
+            dummy.scale.set(bs, bs * (0.85 + rnd() * 0.3), bs);
+            dummy.rotation.y = rnd() * Math.PI * 2;
+            dummy.updateMatrix();
+            emitted["veg-bloom"]++;
+            emit("veg-bloom", bx, bz);
+          }
+        }
       }
     }
 
@@ -408,11 +542,12 @@ export function buildInstancedVegetation(
     "veg-chestnut": { geo: chestnutGeo, mat: chestnutMat },
     "veg-rock": { geo: rockGeo, mat: rockMat },
     "veg-scrub": { geo: scrubGeo, mat: scrubMat },
+    "veg-bloom": { geo: bloomGeo, mat: bloomMat },
   };
 
   const buckets = new Map<string, Placement[]>();
   for (const pl of placements) {
-    const cell = pl.species === "veg-scrub" ? SCRUB_CHUNK_M : CHUNK_M;
+    const cell = pl.species === "veg-scrub" || pl.species === "veg-bloom" ? SCRUB_CHUNK_M : CHUNK_M;
     const key = `${pl.species}|${Math.floor(pl.x / cell)}|${Math.floor(pl.z / cell)}`;
     const list = buckets.get(key);
     if (list) list.push(pl);
@@ -423,8 +558,12 @@ export function buildInstancedVegetation(
     const species = key.slice(0, key.indexOf("|"));
     const { geo, mat } = perSpecies[species];
     const mesh = new THREE.InstancedMesh(geo, mat, list.length);
-    for (let i = 0; i < list.length; i++) mesh.setMatrixAt(i, list[i].matrix);
+    for (let i = 0; i < list.length; i++) {
+      mesh.setMatrixAt(i, list[i].matrix);
+      mesh.setColorAt(i, list[i].tint);
+    }
     mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     // Named by species, not by cell: tests and any future per-species logic group on this,
     // and which cell an instance landed in is an implementation detail of the culler.
     mesh.name = species;
